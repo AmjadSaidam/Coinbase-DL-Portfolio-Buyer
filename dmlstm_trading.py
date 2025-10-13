@@ -13,7 +13,7 @@ from sklearn.preprocessing import StandardScaler
 # Data Pre-Processing
 # =============================================
 # standerdise inputs 
-def difference(x):
+def standerdise(x):
     res = None
     if x.ndim == 1:
         x = x.reshape(-1, 1) # single feature data 
@@ -44,10 +44,10 @@ def train_test_split_time_series(data, train_size = 0.7):
     return train, test
 
 # make price series stationary process by differencing, not used 
-def de_correlate_prices(prices):
-    prices = pd.DataFrame(prices)
-    asset_prices_shift = prices.shift(1).bfill() # fill na's with last value
-    stationary_returns = np.log(prices) - np.log(asset_prices_shift)
+def difference(series: np.ndarray):
+    series = pd.DataFrame(series)
+    asset_prices_shift = series.shift(1).bfill() # fill na's with last value
+    stationary_returns = series - asset_prices_shift
 
     return np.array(stationary_returns)
 
@@ -74,8 +74,8 @@ def prepare_features(asset_returns: np.ndarray,
     # i.e. get lagged variables set, lagged by lookback
     for t in range(lookback, n_timesteps):
         # features, time series properties are invariant to z-transform, standerdise =/ stationary
-        past_prices = difference(asset_prices[t - lookback: t]) # will get n-timesteps - lookback number of batches
-        past_returns = difference(asset_returns[t - lookback: t])
+        past_prices = standerdise(asset_prices[t - lookback: t]) # will get n-timesteps - lookback number of batches
+        past_returns = standerdise(asset_returns[t - lookback: t])
         
         # labels 
         features = np.concatenate([past_prices, past_returns], axis=1) # each batch is a of size n_assets*2, returns are second set of columns
@@ -165,6 +165,9 @@ def backprop_rnn(asset_returns, asset_prices, target_returns,
     # run backprop
     for epoch in tqdm(range(n_epochs)):
         for x_batch, y_batch in train_loader:
+            # clear gradients per step 
+            optimizer.zero_grad()
+
             weights = model(x_batch)  # output = (batch_size, sequence_length, hidden_size)
             # weights = weights.squeeze(0) # reduces list dimension to hidden dimension size
             
