@@ -90,6 +90,47 @@ def prepare_features(asset_returns: np.ndarray,
     return torch.tensor(x_array, dtype = torch.float32), torch.tensor(y_array, dtype = torch.float32) # pass list of arrays transform to tensors, do not use torch.FloatTensor() because slow
 
 # =============================================
+# Constraints
+# =============================================
+def min_rebalance(weights: torch.Tensor, minimum_value: float, iterations=10):
+    """ Applies min(max(x, min_val), max_val) and rebalances accordingly, min is dropped because no max 
+    """
+    # clone_weights so we do not detach from computation graph 
+    weights = weights.clone()
+
+    # deal with edge case 
+    elements = weights.numel()
+    if minimum_value*elements > 1:
+        raise ValueError('minvalue*elements > 1, constraint is infeasible, reduce minimum value')
+
+    # 1
+    new_weights = torch.clamp(weights, min = minimum_value)
+
+    # 2
+    new_weight_cond = new_weights <= minimum_value + 1e-12
+    new_weights_set = new_weights[new_weight_cond] # all floored weights
+    invarient_weights_set = new_weights[~new_weight_cond] # boolean mask 
+
+    # 3
+    new_weight_set_diff = torch.sum(minimum_value - weights[new_weight_cond])
+
+    # 4
+    sum_invarient_set = torch.sum(invarient_weights_set)
+    if new_weight_set_diff.item() > 0:
+        new_weights[~new_weight_cond] -= (new_weights[~new_weight_cond] / sum_invarient_set)*new_weight_set_diff # will edit new_weights in place
+
+    # last normalisation
+    w = torch.clamp(new_weights, min=minimum_value)
+    w /= torch.sum(w)
+
+    # recursion 
+    if iterations > 0 and torch.any(w < minimum_value): # stoping case
+        # repeat process 
+        return min_rebalance(weights = w, minimum_value = minimum_value, iterations = iterations - 1)
+    else: 
+        return w
+
+# =============================================
 # DmLSTM
 # =============================================
 class DmLSTM(nn.Module):
@@ -106,7 +147,7 @@ class DmLSTM(nn.Module):
         self.fc = nn.Linear(hidden_dim, output_dim) # Final linear layer to map LSTM output to weights
         self.output = nn.Softmax(dim=-1) # apply last activation to inforce long-only sum to 1 constraint
 
-    def forward(self, x: torch.Tensor, hidden=None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, hidden=None, use_weight_constraint = False, weight_constraint = None) -> torch.Tensor:
         """Forwards Pass:
         Input: dim(x) = (batch_size, sequence_length, input_size = n_assets * n_features)
         Output: dim(x) = (batch_size, sequence_length, hidden_dimensions)
@@ -122,11 +163,18 @@ class DmLSTM(nn.Module):
         # note in this steup we have n batches and in each batch we have a sequence of length looback, at each t in lookback the LSTM will product n_assets weights
         output = self.fc(output)
         output = self.output(output)
+        final_output = output[:, -1, :] # (batch_size, n_assets), dropping sequence
 
-        return output[:, -1, :] # last prediction in batch at t=lookback, this will yeild output dim = n_assets
+        # post processing
+        if use_weight_constraint: 
+            final_output = torch.stack([
+                min_rebalance(weights = row, minimum_value = weight_constraint) for row in final_output
+            ], dim = 0)
+
+        return final_output # last prediction in batch at t=lookback, this will yeild output dim = n_assets
     
 # =============================================
-# Loss Function 
+# Loss Function (1D)
 # =============================================
 def wasserstein_distance(X, Y):
     if isinstance(X, torch.Tensor) and isinstance(Y, torch.Tensor):  
@@ -143,6 +191,7 @@ def wasserstein_distance(X, Y):
 # =============================================
 def backprop_rnn(asset_returns, asset_prices, target_returns,
                  lookback: int, batch_size = 64, hidden_dim=100, num_layers=2, n_epochs=100, learning_rate=0.001, 
+                 min_weight_constraint = False, min_weight_value = None, 
                  show_progress = False) -> dict:
     """
     Train PortfolioRNN with backpropagation, avoiding information leakage.
@@ -165,14 +214,13 @@ def backprop_rnn(asset_returns, asset_prices, target_returns,
     # run backprop
     for epoch in tqdm(range(n_epochs)):
         for x_batch, y_batch in train_loader:
-            # clear gradients per step 
-            optimizer.zero_grad()
+            optimizer.zero_grad() # clear gradients per step 
 
-            weights = model(x_batch)  # output = (batch_size, sequence_length, hidden_size)
+            weights = model(x_batch, use_weight_constraint = min_weight_constraint, weight_constraint = min_weight_value)  # output = (batch_size, sequence_length, hidden_size)
             # weights = weights.squeeze(0) # reduces list dimension to hidden dimension size
             
             # Compute portfolio weighted returns 
-            returns_t = x_batch[:, -1, n_assets:] # or returns_t[:, ::2]  (batch, n_assets * k)
+            returns_t = x_batch[:, -1, n_assets:] # or returns_t[:, ::2]  (batch, n_assets * k), k = number of features
    
             # compute portfolio return
             Rhat = torch.sum(weights * returns_t, dim=1)
@@ -191,10 +239,10 @@ def backprop_rnn(asset_returns, asset_prices, target_returns,
     
     # After training, compute final weights/returns 
     with torch.no_grad(): # detach from computation graph 
-        weights = model(X)
+        weights = model(X, use_weight_constraint = min_weight_constraint, weight_constraint = min_weight_value)
         final_weights = weights.detach().numpy()  # (m-lookback, n_assets)
 
-        # Final portfolio returns 
+        # Final portfolio weighted returns 
         portfolio_returns_final = torch.sum(torch.FloatTensor(final_weights) * asset_returns[lookback:], dim=1).detach().numpy()
 
     # For publication: Return loss history for plotting convergence
