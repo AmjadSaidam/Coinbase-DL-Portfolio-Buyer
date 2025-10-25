@@ -1,0 +1,78 @@
+# general
+# note: If you import/download any new module you must rebuild the docker image and container, this file remains stays the same
+
+# syntax=docker/dockerfile:1
+
+# ---- Base Image ----
+ARG PYTHON_VERSION=3.12
+FROM python:${PYTHON_VERSION}-slim AS base
+
+# ---- Environment ----
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# ---- System Dependencies ----
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gcc \
+    g++ \
+    gfortran \
+    libssl-dev \
+    libffi-dev \
+    python3-dev \
+    libblas-dev \
+    liblapack-dev \
+    zlib1g-dev \
+    libbz2-dev \
+    liblzma-dev \
+    libsqlite3-dev \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---- Upgrade Pip ----
+RUN python -m pip install --upgrade pip setuptools wheel
+
+# ---- Create Non-Privileged User ----
+ARG UID=10001
+RUN adduser --disabled-password --gecos "" \
+    --home "/nonexistent" \
+    --shell "/sbin/nologin" \
+    --no-create-home \
+    --uid "${UID}" appuser
+
+# ---- Create and Set Permissions for /app/db ----
+RUN mkdir -p /app/db && \
+    chown -R appuser:appuser /app/db && \
+    chmod -R 770 /app/db
+
+# ---- Install Python Dependencies ----
+COPY requirements.txt .
+RUN python -m pip install --no-cache-dir -r requirements.txt
+
+# ---- Copy Application Code ----
+# snapshot copy of our repo
+COPY . .
+
+# ---- Switch to Non-Privileged User ----
+USER appuser
+
+# ---- Expose (Container) Port ----
+EXPOSE 8000
+
+# ---- Default Command ----
+# For example, switch between:
+CMD ["python", "telegram_bot.py"]
+#CMD ["python", "market_algorithm.py"]
+
+# from here, in terminal:
+# 1) to build image (do for each .py file) -> docker build -f DockerFile -t {image_name} .
+# 2) to build container -> docker run -d --restart always -p 8000:8000 --name {container_name} {image_name}
+# # for ports, the boilerplate is -p {host port}:{container port from EXPOSE}
+
+# If running on docker desktop
+# When building the market_algorithms container include a volume (v) mount -v "$(pwd)":/app
+# this is so when building our container, we are able to read and write to our local database files, otherwise we get a sqlight3.OperationalError
+# The Volume mount allows dynamic updates, overiding the COPY . . snapshot 
