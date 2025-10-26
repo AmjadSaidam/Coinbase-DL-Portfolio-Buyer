@@ -63,9 +63,8 @@ USER appuser
 EXPOSE 8000
 
 # ---- Default Command ----
-# For example, switch between:
-CMD ["python", "telegram_bot.py"]
-#CMD ["python", "market_algorithm.py"]
+# replace with "market_algorithm.py" after running or replace immediatelly if using option 2 -> README
+CMD ["python", "telegram_bot.py"] 
 
 # from here, in terminal:
 # 1) to build image (do for each .py file) -> docker build -f DockerFile -t {image_name} .
