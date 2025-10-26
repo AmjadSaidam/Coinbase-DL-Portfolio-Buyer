@@ -1,12 +1,8 @@
 # Coinbase-Advanced Deep-Learning Trading Bot: A Deployable (End-to-end) Trading Strategy
 
-
-
 ![Coinbase Advanced - Trading Strategy Logs](/images/Coinbase_web_orders.png)
 
-
-
-Looking to fully automate you’re cryptocurrency trading using state of the art machine-learning based methods. Well, this repository might be what you’re looking for. This repository provides all the requirements needed to fully automate a portfolio-based trading strategy that buys and sells cryptocurrency on the Coinbase exchange. The trading algorithm we use is inspired by the deep-learning based models in my MSc thesis [1] "Distribution-Driven Portfolio Optimisation using Deep-Learning". Importantly, we also include a multi-timeframe multi-hyperparameter model optimisation and a trading strategy fee-based backtest in the `backtest.ipynb` to give an idea of model performance and uncover optimal model settings, we can use to extract more access return in Live markets. 
+Looking to fully automate you’re cryptocurrency trading using state of the art machine-learning based methods. Well, this repository might be what you’re looking for. This repository provides all the requirements needed to fully automate a portfolio-based trading strategy that buys and sells cryptocurrency on the Coinbase exchange. The trading algorithm we use is inspired by the deep-learning based models in my MSc thesis [1] "Distribution-Driven Portfolio Optimisation using Deep-Learning". Importantly, we also include a multi-timeframe multi-hyperparameter model optimisation and a trading strategy fee-based backtest in the `backtest.ipynb` to give an idea of model performance and uncover optimal model settings, we can use to extract more excess return in Live markets. 
 
 The rest of this README file will outline how to push this repository's contents to live markets and use the Telegram bot functionality for data extraction and direct strategy control. We will provide the steps for both local and remote deployment, using VS-code and Docker Desktop and VS Code, AWS, and Docker engine respectively. The latter is incase you want this strategy to run 24/7, 365.
 
@@ -18,6 +14,7 @@ I know the word demystify has become something of a buzzword (espically in the q
 * Crypotocurrency trading is very risky, and your capital is at risk.
 * Do not Invest more than you are willing to loose.  
 * Backtest results, are not indicative of future performance.
+* Out of the box this strategy only works in Spot markets. (Future market compatibility in future updates).
 
 ## Getting Started:
 
@@ -36,6 +33,11 @@ Clone this repository in your terminal.
 ```bash
 git clone <this_repo_url>
 ```
+
+### Defining Our Portfolio
+
+For the stratgey to know what assets to buy and sell, you must edit this list `portfolio_assets = ['BTC-GBP', 'ETH-GBP', 'SOL-GBP']` in `market_algorithm.py`. 
+
 ### Setting up Coinbase Account and Downloading CDP API
 
 You will require a Coinbase Advanced Account [2] and a valid ECDSA API key downloaded as a `.json` file. follow these steps ...
