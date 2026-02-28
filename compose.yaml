@@ -7,10 +7,29 @@
 # You can add other services your application may depend on here, such as a
 # database or a cache. For examples, see the Awesome Compose repository:
 # https://github.com/docker/awesome-compose
+
+# use .:/app user volume, so user of container has write permissions 
+
 services:
-  server:
-    build:
-      context: .
+  service1: 
+    build: . 
+    command: ['python', 'telegram_bot.py']
+    container_name: telegram_bot
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+  
+  service2:
+      build: .
+      command: ['python', 'market_algorithm.py']
+      container_name: strategy 
+      ports:
+        - "9000:9000"
+      volumes: 
+        - .:/app
+
+# run from command line: docker compose up --build 
 
 # The commented out section below is an example of how to define a PostgreSQL
 # database that your application can use. `depends_on` tells Docker Compose to
