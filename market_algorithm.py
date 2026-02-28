@@ -1,14 +1,14 @@
 # imports (only read by python process at import time)
 import pandas as pd 
 import numpy as np
-import dmlstm_trading as dmlstm 
-import coinbase_order_functions as cb_trade 
+import dl_model.dmlstm_trading as dmlstm 
+import trading_logic.coinbase_order_functions as cb_trade 
 import datetime as dt 
 import schedule 
-import json
+import time
 from scipy.stats import skewnorm
 # get strategy status from telegram bot (runs in same interpreter)
-from telegram_bot import shut_down_state_file_name, load_json # need file name do we can load written josn data
+from telegram_bot import shut_down_state_file_name, load_json # need file name so we can load written json data
 # store results in a sql database 
 import data_to_sql 
 
@@ -59,7 +59,7 @@ def model_batch_data(return_data, price_data, batching_lookback, **kwargs):
 def run_process(process, every: int, time_unit: str, **kwargs):
     """ Runs all Process
     process: the job we want to exacute  
-    every: multiple of time, we append this string as a key to the schedule module 
+    every: multiple of time, used as key in schedule module 
     time: the timeframe 
     """
     return getattr(schedule.every(interval = every), time_unit).do(process, **kwargs) # if process has arguments call in .do() so process is callable
@@ -73,27 +73,21 @@ def f():
     return print('idling | time:', dt.datetime.today().isoformat())
 
 # out tickers
-portfolio_assets = ['BTC-GBP', 'ETH-GBP', 'SOL-GBP'] # can include more assets for large portfolio
+portfolio_assets = ['BTC-GBP', 'ETH-GBP', 'SOL-GBP', 'ADA-GBP'] # can include more assets for large portfolio
 
 # run all 
 if __name__ == '__main__': 
     # connect to coinbase advanced account 
-    coinbase_account = account_path('cdp_activate_api_key.json')
+    coinbase_account = account_path('cdp_activate_api_key.json') # follow README.md instructions to get your key (then jsut copy path name into account_path()
     # for data functions
     data_frequency = 'ONE_HOUR'
     freq = '1h'
     data_max = {'hours': 350}
-    # schedule data, predict, order times
+    # schedule data/model-training/model-predictions/orders and database upload
     schedule_every = 1
     schedule_tf = 'hours'
-    # schedule training times 
-    schedule_training_every = 1
-    schedule_training_tf = 'D' # to replicate test set in backtest do 350*(1 - train_fraction) * tf
-    # time for real weights upload (their is lag to account for, as order although sent instantely do no exacute on the exchange instantelly)
-    schedule_real_weights_every = 40 # could choosen 1min although we would then have 60 updates per minute
-    schedule_real_weights_tf = 'minutes'
     # min invest quantity
-    min_weight = 0.2 # min % of portfolio value investment
+    min_weight = 0.2 # min % of portfolio value to invest (min asset weight)
     # instantiate database for real time data upload 
     model_db = data_to_sql.CreateSQLiteDatabase(tickers = portfolio_assets, name_database = 'model_output.db', name_data = 'model_output')
     model_db.create_access_database_file()
@@ -127,7 +121,7 @@ if __name__ == '__main__':
         global model 
         returns_all = np.array(scheduled_output['return_data']) # possibly abstract away into run_process using **kwargs
         prices_all = np.array(scheduled_output['price_data'])
-        target_returns_all = np.array(target_dist_sampler(n_samples = len(returns_all), **target_dist_param))
+        target_returns_all = np.array(target_dist_sampler(n_samples = len(returns_all), **target_dist_param)) # target portfolio return distribution
         model = dmlstm.backprop_rnn(asset_returns = returns_all, 
                                     asset_prices = prices_all, 
                                     target_returns = target_returns_all, 
@@ -160,23 +154,26 @@ if __name__ == '__main__':
         try:
             pre_rebalance_weights = coinbase_account.get_real_weights(portfolio_assets)
         except Exception as e:
-            pass
+            pre_rebalance_weights = None 
     
         return print('pre-rebalance portfolio weights ------->', pre_rebalance_weights, 
                      '\nmodel prediction ------->', predicted_portfolio_weights) # for debug 
 
     # send market orders by instantiating portfolio or rebalancing
     order_to_market = None 
-    def order_to_exchange(**kwargs):
-        global order_to_market
+    def order_to_exchange():
+        global order_to_market, predicted_portfolio_weights
         # check if user has prompted telegram bot to stop strategy (with effect in next scheduled call)
         try:
             strategy_shut_command = load_json(file = shut_down_state_file_name)['status'] # filter for required key
             print('strategy shut down ------->', strategy_shut_command)
 
-            # send order
+            # ticker/weight model prediction 
+            order_to_exchange_input_dict = coinbase_account.tickers_weight(portfolio_assets, predicted_portfolio_weights)
+            
+            # model prediction to order message 
             order_to_market = coinbase_account.multi_asset_invest(
-                portfolio_ticker_weights = coinbase_account.tickers_weight(**kwargs),
+                portfolio_ticker_weights = order_to_exchange_input_dict,
                 shut_down = bool(strategy_shut_command) # check is user has set shut down to True, if so hault strategy 
             )
         except Exception as e:
@@ -199,37 +196,27 @@ if __name__ == '__main__':
 
         print('post-rebalance portfolio weights ------->', real_weights)
 
-    # initial data pull -> model train -> model predict
-    scheduled_data()
-    train_dmlstm()
-    model_prediction()
-    order_to_exchange_input_dict = {'tickers': portfolio_assets, 'weights': predicted_portfolio_weights} # after the above functions run the global variables are updated, avoiding a NoneType error
-    order_to_exchange(**order_to_exchange_input_dict)
+    # Build pipeline to inforce scheduling dependence: order is initial data pull -> model train -> model predict -> send orders -> get metadata -> loop 
+    def pipeline():
+        # 1) pull data
+        scheduled_data()
+        # 2) train model 
+        train_dmlstm()
+        # 3) model predictions 
+        model_prediction()
+        # 4) create signals and send orders 
+        order_to_exchange()
+        # 5) write SQL data:
+        weights_to_database()
+        time.sleep(15) # sleep and wait for orders to exacuate and reflect in account 
+        get_real_weights()
 
-    # save model output -> save the total invested in each asset as fraction of total invested (should be very close to model output)
-    weights_to_database()
+    # call in synch pipeline 
+    #schedule.every(schedule_every).minutes.do(pipeline)
+    run_process(process = pipeline, every = schedule_every, time_unit = 'minutes')
 
-    # schedule future updates in order of initial run 
-    # pull data (every data_frequency e.g. 4H)
-    run_process(process = scheduled_data, every = schedule_every, time_unit = schedule_tf) # adjust get_feature_data to include global callback 
-
-    # train model (every retrain period e.g. D)
-    run_process(process = train_dmlstm, every = schedule_training_every, time_unit = schedule_training_tf)
-
-    # use model to predict (every data_frequency e.g. 4H)
-    run_process(process = model_prediction, every = schedule_every, time_unit = schedule_every) # training many models on the same data, outputs similar results
-
-    # create portfolio using model predictions (every data_frequency e.g 4H)
-    run_process(process = order_to_exchange, every = schedule_every, time_unit = schedule_tf, **order_to_exchange_input_dict)
-
-    # upload model weights and real weights to SQLight database 
-    run_process(process = weights_to_database, every = schedule_every, time_unit = schedule_tf)
-
-    # Check if we invested the model predicted weights, time must be less than others
-    run_process(process = get_real_weights, every = schedule_real_weights_every, time_unit = schedule_real_weights_tf) # takes some time for transcations to show on accounts
-
-    # Re-train model every set time - just for debug
-    run_process(process=f, every = 1, time_unit = 'seconds')
+    # Re-train model (dubug code) every set time 
+    #run_process(process=f, every = 1, time_unit = 'seconds')
     
     # run process
     print('Press Ctrl+C to hault process')
