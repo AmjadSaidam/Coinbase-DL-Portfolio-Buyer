@@ -1,18 +1,22 @@
-import numpy as np 
+"""
+"""
+import numpy as np
+import copy
 import torch
 import torch.nn as nn
 from tqdm import tqdm
+from sparsemax import Sparsemax
+# .py
 from torch.utils import data 
 from models.device import get_device
-from models.lstm_trading import wasserstein_distance, mmd, tensor_standardise
-import copy
+from models.lstm_trading import reverse_kl_divergance
 
 class neural_net_model(nn.Module):
     """
     """
-    def __init__(self, in_dim, out_dim, num_neurons=100, num_layers=10, long_only: bool = True):
+    def __init__(self, in_dim, out_dim, num_neurons=100, num_layers=2, shorts: bool = False):
         super().__init__()
-        self.long_only = long_only
+        self.shorts = shorts
         layers = []
         layers.append(nn.Linear(in_dim , num_neurons))
         layers.append(nn.ReLU())
@@ -24,41 +28,50 @@ class neural_net_model(nn.Module):
         aL = nn.Linear(num_neurons, out_dim)
         layers.append(aL)
         self.fc = nn.Sequential(*layers)
-        self.last = nn.Softmax(dim = -1) if long_only else nn.Tanh()
+        self.last = nn.Tanh() if self.shorts else Sparsemax()
     
     def forward(self, x: torch.Tensor):
         out = self.fc(x)
         out = self.last(out) 
-        if not self.long_only:
+        if self.shorts:
             out / torch.sum(torch.abs(out), dim = 1, keepdim = True)
 
         return out
     
-def data_pre_process(feature_data: torch.Tensor, current_return: torch.Tensor, labels: torch.Tensor, batches: int):
+def data_pre_process(feature_data: torch.Tensor, 
+                     current_return: torch.Tensor, 
+                     labels: torch.Tensor, batches: int):
     """
     """
     return data.DataLoader(data.TensorDataset(feature_data, current_return, labels), shuffle = False, drop_last = False, batch_size = batches)
 
 class simple_neural_net():
-    def __init__(self, in_dim, out_dim, num_neurons=100, num_layers=10, long_only: bool = True):
+    def __init__(self, 
+                 in_dim, 
+                 out_dim, 
+                 num_neurons = 100, 
+                 num_layers = 10, 
+                 shorts: bool = False):
         self.device = get_device()
-        self.model: neural_net_model = neural_net_model(in_dim, out_dim, num_neurons, num_layers, long_only).to(self.device)
+        self.model: neural_net_model = neural_net_model(in_dim, out_dim, num_neurons, num_layers, shorts).to(self.device)
         self.tr_loss_container: list = []
         self.eval_loss_container: list = []
-        self.learning_rate: float = 1e-3
+        self.learning_rate: float = 0.001
         self.eval_loss: float = 0
         self.opt_train_res: float = []
     
-    def simple_neural_net_train(self, train_loader, eval_loader, epochs):
+    def simple_neural_net_train(self, 
+                                train_loader, 
+                                eval_loader, 
+                                epochs):
         """"""
-        self.model.train()
-
         optimizer = torch.optim.Adam(self.model.parameters(), lr = self.learning_rate)
 
         min_loss = float('inf')
         best_model_params = None
 
         for epoch in tqdm(range(epochs)): 
+            self.model.train()
             tr_loss = 0
             total_pred = 0 
             for (x_tr, rt, y_tr) in train_loader:
@@ -69,7 +82,7 @@ class simple_neural_net():
                 # predict 
                 w_p = self.model(x_tr)
                 rp = torch.sum(w_p * rt, dim = 1)
-                loss = wasserstein_distance(rp, y_tr)
+                loss = reverse_kl_divergance(rp, y_tr)
 
                 # backpropegate
                 optimizer.zero_grad() 
@@ -112,7 +125,7 @@ class simple_neural_net():
                 w_p = self.model(x_ts)
                 rp = torch.sum(w_p * rt, dim = 1)
 
-                loss = wasserstein_distance(rp, y_ts)
+                loss = reverse_kl_divergance(rp, y_ts)
 
                 # log outputs
                 self.eval_loss += loss.item()

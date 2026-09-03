@@ -1,5 +1,6 @@
-# general
-# note: If you import/download any new module you must rebuild the docker image and container, this file remains stays the same
+# build instruction file used to create images and containers 
+# note: If you import/download any new module you must rebuild the docker image and container, this file remains the same
+
 
 # syntax=docker/dockerfile:1
 
@@ -64,14 +65,14 @@ EXPOSE 8000
 
 # ---- Default Command ----
 # replace with "market_algorithm.py" after running or replace immediatelly if using option 2 -> README
-CMD ["python", "telegram_bot.py"] 
+CMD ["python", "market_algorithm.py"] 
 
 # from here, in terminal:
 # 1) to build image (do for each .py file) -> docker build -f DockerFile -t {image_name} .
 # 2) to build container -> docker run -d --restart always -p 8000:8000 --name {container_name} {image_name}
-# # for ports, the boilerplate is -p {host port}:{container port from EXPOSE}
+# for ports, the boilerplate is -p {host port}:{container port from EXPOSE}
 
 # If running on docker desktop
-# When building the market_algorithms container include a volume (v) mount -v "$(pwd)":/app
+# When building the market_algorithms container include a volume (v) mount -v "$(pwd)":/app (must include before image name)
 # this is so when building our container, we are able to read and write to our local database files, otherwise we get a sqlight3.OperationalError
 # The Volume mount allows dynamic updates, overiding the COPY . . snapshot 

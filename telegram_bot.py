@@ -6,13 +6,13 @@ from typing import Final # used to set constant types
 from telegram import Update # deals with commands, sends HTTP request to telegarm  
 from telegram.ext import Application, CommandHandler, ContextTypes
 # others
-import coinbase_order_functions as cb_trade
+import trading_logic.coinbase_order_functions as cb_trade
 import numpy as np 
 import json 
 import datetime as dt 
 
 # HTTP API and bot name
-TOKEN: Final = 'your_api_token'
+TOKEN: Final = '8146567259:AAFLGOsLRLHO5kb0nYLzFkwgdhhO3g68eLU'
 BOT_USERNAME: Final = '@coinbase_portfolio_bot'
 
 # input api details command
@@ -45,10 +45,10 @@ async def get_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if coinbase_account is not None: 
         try:
             user_accounts = coinbase_account.get_user_accounts() # get account data 
-            context.user_data['user_accounts'] = user_accounts # save aas global variable 
+            context.user_data['user_accounts'] = user_accounts # save as global variable 
             text = f'succeffully pulled data {context.user_data.get('user_accounts')}'
         except Exception as e:
-            text = f'account link establisded but failed to load account information, error message: {e}'
+            text = f'account link establisded but failed to load account information. Error message: {e}'
     else: 
         text = 'keys are invalid'
 
@@ -75,7 +75,7 @@ async def shut_down_reactivate(update: Update, context: ContextTypes.DEFAULT_TYP
     if coinbase_account is not None and not (shut_down == None):
         try:
             json_dict = {f'status': shut_down} # json boolean type is lower case 
-            save_json(name = shut_down_state_file_name, data = json_dict)
+            save_json(name = shut_down_state_file_name, data = json_dict) # write updated strategy on/off command
             if shut_down:
                 order = coinbase_account.multi_asset_close(
                     portfolio_tickers = portfolio_assets, 
@@ -107,7 +107,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         /start - gets list of all available commands.
         /link - establishes link to all coinbase (must prompt first to use other functions) advanced account. To correctley propmt, provide your CDP key name and private key serparted with a space, example: "link <APIname> <APIPrivateKey>". Ensure you do not enclose name and key with quotation marks.
         /getinvestments - function returns all user accounts, including your base account, and lists the value invested in each in terms of the asset currency.
-        /shut_down - function that hauts and reactivates the strategy exacution (can be toggled on or off), example: "closeordersandshutdown <[False, True]>", the first command toggles the strategy on/off. The effect is not emmediate, the prompt will exacuate in the next scheduled run of sending orders, after model training.
+        /shut_down - function that hauts and reactivates the strategy exacution (can be toggled on or off), example: "\shutdown <[False, True]>", the first command toggles the strategy on/off. The effect is not emmediate, the prompt will exacuate in the next scheduled run of sending orders, after model training.
         """
     )
     

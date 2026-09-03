@@ -25,6 +25,7 @@ class CoinbaseTrader:
     def __init__(self, api_key, api_secret):
         self.client = RESTClient(api_key=api_key, api_secret=api_secret)
         self.authenticated = False
+        self.cash = 0
     
     def login(self):
         """Authentication function:
@@ -56,7 +57,7 @@ class CoinbaseTrader:
         asset = self.get_base(asset)
         return account_values[asset] # asset associted holding, e.g. BTC-USD -> BTC: x  
 
-    def coinbase_data(self, products, time_frame_candle, get_returns = True, freq = '1h', **kwargs): 
+    def coinbase_data(self, products: list[str], time_frame_candle: str, get_returns = True, freq = '1h', **kwargs): 
         """
         gets close and return data, supports 1min -> 1 Day data requests, limited to 1 Day 
 
@@ -68,41 +69,41 @@ class CoinbaseTrader:
         # time (range from past -> present)
         end_time = datetime.datetime.today() # present time 
         start_time = end_time - datetime.timedelta(**kwargs) # the histroic time 
-        date_range = len(pd.date_range(start = start_time, end = end_time, freq = freq)) # time range 
+        date_range = pd.date_range(start = start_time, end = end_time, freq = freq) # time range 
 
         start_time = str(int(start_time.timestamp()))
         end_time = str(int(end_time.timestamp()))
 
         # get data 
         for product in products:
-            candles = self.client.get_public_candles(
-                product_id = product, 
-                start = start_time, 
-                end = end_time, 
-                granularity = time_frame_candle, 
-            )        
-
-            # filter data 
-            closes = [float(candle['close']) for candle in candles['candles']][::-1] # turn string data to float, and invert list to chronological order
             try:
-                data[product] = closes
-            except Exception as e:
-                try:
-                    data[product] = np.pad(closes, pad_width = (0, date_range - len(closes)), mode = 'edge').tolist()[1:] # forward/backward fill missing values with last value
-                except Exception as e:
-                    print(f'failed {product} download')
-            pass
+                candles = self.client.get_public_candles(
+                    product_id = product, 
+                    start = start_time, 
+                    end = end_time, 
+                    granularity = time_frame_candle, 
+                )        
 
+                # filter data 
+                closes = [float(candle['close']) for candle in candles['candles']][::-1] # turn string data to float, and invert list to chronological order
+                data[product] = closes
+                data[product] = np.pad(closes, pad_width = (0, len(date_range) - len(closes)), mode = 'edge').tolist()[1:] # forward/backward fill missing values with last value
+            except Exception as e:
+                raise InterruptedError(f'failed {product} download')
+        
         if get_returns: 
             data = data.pct_change().dropna(how = 'any') # will drop first row 
         else:
-            data = data.iloc[1:, :] # makre sure datasets are equal length
+            data = data.iloc[1:, :] # make sure datasets are equal length
+
+        # now have data length append dates
+        data.set_index(pd.Index(date_range[-len(data): ]), inplace=True)
         
         return data  
 
     def get_user_accounts(self) -> dict[float]:
         """
-        get value GBP value invested in each asset in portfolio
+        get base value invested for each asset in portfolio
         """
         accounts = self.client.get_accounts() # all authenticated user accounts
         account_values = {}
@@ -176,18 +177,18 @@ class CoinbaseTrader:
         loops over portfolio and calculates all investments in QUOTE (GBP), e.g. [GBP-BTC: 0.5, GBP-SOL: 2] = [BTC-GBP: 40,000, SOL-GBP: 400]
         """
         accounts = self.get_user_accounts()
-        cash = accounts.get('GBP', 0)
+        self.cash = accounts.get('GBP', 0) # get GBP else return 0 
         invested = sum([self.base_to_quote(accounts, key) for key in accounts.keys() if key != 'GBP']) # always in terms of BASE, transfer to QUOTE to standerdise
-        return float(invested + cash) 
+        return float(invested + self.cash) 
 
     def get_real_weights(self, portfolio_tickers) -> list[float]:
         """
-        will get the weight of each asset in the portfolio
+        will get the weight of each specified asset in the portfolio
         """
         accounts = self.get_user_accounts()
-        pf_tickers_base = [self.get_base(ticker) for ticker in portfolio_tickers]
+        pf_tickers_base = [self.get_base(ticker) for ticker in portfolio_tickers] # get base list e.g. [BTC, ETH, SOL, ... ]
         pf_value = self.total_portfolio_value()
-        return [max(self.base_to_quote(accounts, key) / pf_value, 0) for key in pf_tickers_base]
+        return [max(self.base_to_quote(accounts, key) / pf_value, 0) for key in pf_tickers_base] # base investemnt in quote terms as fraction of total quote e.g. BTC-GBP / Portfolio GBP
 
     # include a get incrument function, that gets the required precision for each asset, the base_size/quote size must be an mutliple of the base/quote increment
     def order_value_to_increment(self, asset: str, order_value: float, increment_type = 'base_increment') -> float:
@@ -195,7 +196,7 @@ class CoinbaseTrader:
         BASE-incruments vary per asset and order type
         """
         if increment_type not in ['base_increment', 'quote_increment']:
-            raise ValueError('must be base_incrument or quote_incrument')
+            raise KeyError('must be base_incrument or quote_incrument')
 
         product = self.client.get_product(asset)
         increment = Decimal(product[increment_type])
@@ -210,6 +211,10 @@ class CoinbaseTrader:
         min_size = Decimal(str(product[min_side_value]))
         if adjusted_order_value < min_size: # if order amount is less than min increment skip order request
             return 0 
+        
+        # if buy trade get min(quote_size_buy, cash_available), to inforce quote_size_buy <= cash_avialble
+        if increment_type == 'quote_increment':
+            adjusted_order_value = min(adjusted_order_value, self.cash)
         
         return float(adjusted_order_value)
 
@@ -310,17 +315,17 @@ class CoinbaseTrader:
         
         return orders
         
-    def multi_asset_invest(self, portfolio_ticker_weights: dict, account_base = "GBP", shut_down = False):
+    def multi_asset_invest(self, portfolio_ticker_weights: dict[str, float], account_base: str = "GBP", shut_down: bool = False) -> dict:
         """
         portfolio rebalancing function (the main signal to trade execuation function)
         """
         accounts = self.get_user_accounts()
         equity = accounts[account_base]
         gbp_balance = accounts.pop(account_base) # get only invested amount / remove BASE account 
-        total_portfolio_value = self.total_portfolio_value() # initialize only once 
+        pf_val = self.total_portfolio_value() # initialize only once 
         
         orders, weight_diffs = [], []
-        res = {'orders': orders, 'weight_diffs': weight_diffs, 'account_balance': gbp_balance, 'total_spent': total_portfolio_value, 'strategy_live': not shut_down} 
+        res = {'orders': orders, 'weight_diffs': weight_diffs, 'account_balance': gbp_balance, 'total_spent': pf_val, 'strategy_live': not shut_down} 
         
         que = {}
         if shut_down:
@@ -328,19 +333,17 @@ class CoinbaseTrader:
         else: # can be Any type 
             for key, new_weight in portfolio_ticker_weights.items():
                 # check if not invested. If invested (initilise portfolio), otherwise rebalance portfolio
-                if total_portfolio_value <= 1 or len(accounts) == 0: # possible to have currency left in each asset after closing out positions (unlikley to be alot)
-                    que = {}
+                if (pf_val - self.cash) <= 1 or len(accounts) == 0: # possible to have currency left in each asset after closing out positions (unlikley to be alot)
                     try: 
                         orders.append(
                             self.create_asset_order(asset = key, account_balance = equity, weight = new_weight) # invest weighted amount from initial balance
                             ) # we invest once and then rebalance
                     except Exception as e:
                         print(e)
-                    return res
                 else: 
                     try:
                         # now modify portfolio buy taking opposite / same position in asset
-                        current_weight = max(self.base_to_quote(accounts, key) / total_portfolio_value, 0) # value invested in asset as fraction of total portfolio value in GBP, tak max to avoid divide by 0 error
+                        current_weight = max(self.base_to_quote(accounts, key) / pf_val, 0) # value invested in asset as fraction of total portfolio value in GBP, tak max to avoid divide by 0 error
                         weight_diff = new_weight - current_weight # new - old
                         weight_diffs.append(weight_diff)
                         side = self.order_type(weight_diff)
@@ -350,13 +353,13 @@ class CoinbaseTrader:
                         if side == 'SELL': 
                             orders.append(
                                 self.modify_asset_order(asset = key, 
-                                                        total_pf_value = total_portfolio_value,
+                                                        total_pf_value = pf_val,
                                                         weight_diff = weight_diff)
                                                         ) # for each asset/base divest if full close 
+                            # query order json 
                         else: 
                             que[key] = {
                                 'asset': key, 
-                                'total_pf_value': total_portfolio_value,
                                 'weight_diff': weight_diff
                             }
                     except Exception as e:
@@ -365,14 +368,13 @@ class CoinbaseTrader:
             # now we have enough fiat in GBP to complete the BUY trades, the sum to 1 constarint ensures this is possible 
             if len(que) != 0:
                 accounts = self.get_user_accounts()
-                total_portfolio_value = self.total_portfolio_value()
+                pf_val = self.total_portfolio_value() # re-calculate total pf-value to factor in fees
                 for key, inputs in que.items():
                     try:
                         orders.append(
-                            self.modify_asset_order(**inputs)
+                            self.modify_asset_order(total_pf_value = pf_val, **inputs)
                         )
                     except Exception as e:
                         print(e)
-
-        return res 
-    
+                        
+            return res 
