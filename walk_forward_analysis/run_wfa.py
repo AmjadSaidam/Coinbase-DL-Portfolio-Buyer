@@ -1,12 +1,9 @@
 """
-temrinal run command: python -m walk_forward_analysis/run_wfa.py
+temrinal run command: python -m walk_forward_analysis.run_wfa.py
 """
-import sys
-import numpy as np
 from collections import defaultdict
 from pathlib import Path
 import torch
-import torch.utils.data as data
 import multiprocessing as mp
 import pickle
 # .py
