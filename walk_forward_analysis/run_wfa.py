@@ -96,7 +96,6 @@ def backtest(config: dict[str]):
     oos_prices = config['wfa_out_of_sample_prices']
     
     # train defaults
-    target_vol = config['target_vol']
     tr_split = config['tr_split']
 
     # train and eval sets from in sample data 
