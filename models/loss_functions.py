@@ -128,10 +128,11 @@ def sharpe_ratio_loss(Y: torch.Tensor):
     """
     sharpe ratio loss function for dls model
     """
+    eps = 1e-8
     unb = True
     if Y.shape[0] <= 1:
         unb = False
     exp_rt = torch.mean(Y, dim = 0)
-    std_rt = torch.std(Y, dim = 0, unbiased = unb)
+    std_rt = torch.std(Y, dim = 0, unbiased = unb).clamp_min(eps)
 
     return -exp_rt / std_rt
