@@ -119,23 +119,21 @@ def backtest(config: dict[str]):
                                eval_loader = loaders['eval_loader'], 
                                test_loader = loaders['test_loader'])
     
-    return {
-        'model': model_pipe['model'],
-        'model_predictions': model_pipe['res']
-    }
+    return model_pipe
 
 
 def aggregate_results(wfa_results: list[dict]): 
-    """groups aggregated backtest data"""    
+    """groups aggregated backtest() data"""    
     # stack by bucket 
-    stacked = defaultdict(list) # wights/returns/vol_scale 
+    stacked = defaultdict(list) 
+    # combine results of model_pipe
     for r in wfa_results: 
         # model
         stacked['model'].append(r['model'])
         stacked['model_train_loss_container'].append(r['model_train_loss_container'])
         stacked['model_eval_loss_container'].append(r['model_eval_loss_container'])
         # model output
-        for sub_key, arr in r['model_predictions'].items(): # loop over payload outputs
+        for sub_key, arr in r['res'].items(): # loop over payload outputs
             stacked[sub_key].append(arr) # for each stack, cutoff will contain weights/returns/vol_scale
     
     return stacked
