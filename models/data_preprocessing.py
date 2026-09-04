@@ -21,8 +21,12 @@ def tensor_standardise(x: torch.Tensor, axis: int = 0) -> torch.Tensor:
     """
     if isinstance(x, np.ndarray):
         x = torch.tensor(x, dtype = torch.float32)
+    eps = 1e-8
+    unb = True
+    if x.shape[0] <= 1:
+        unb = False
     mean = torch.mean(x, dim = axis, keepdim = True)
-    std = torch.std(x, dim = axis, keepdim = True)
+    std = torch.std(x, dim = axis, unbiased = unb, keepdim = True).clamp(eps)
     return (x - mean) / std
 
 # standerdise inputs
@@ -135,7 +139,11 @@ def data_pre_process(returns: np.ndarray,
                      mini_batches: int = 64) -> data.DataLoader:
     """builds data loader for lstm"""
     x, y, x_last, x_inv = prepare_features(returns, prices, labels, lookback)
-    return data.DataLoader(data.TensorDataset(x, y, x_last, x_inv), shuffle = False, batch_size = mini_batches, drop_last = False)
+    # drop the final batch when it would leave a single sample, since a
+    # batch of size 1 has zero variance and blows up sharpe_ratio_loss
+    n_samples = x.shape[0]
+    drop_last = (n_samples % mini_batches == 1)
+    return data.DataLoader(data.TensorDataset(x, y, x_last, x_inv), shuffle = False, batch_size = mini_batches, drop_last = drop_last)
 
 def train_eval_test_loaders(loaders: dict[str]):
     """returns train, evaluation and test loaders"""
