@@ -1,5 +1,5 @@
 """
-temrinal run command: python -m walk_forward_analysis.run_wfa.py
+temrinal run command: python -m walk_forward_analysis.run_wfa
 """
 from collections import defaultdict
 from pathlib import Path
@@ -24,19 +24,18 @@ def lstm_pipeline(dim,
                   train_loader, 
                   eval_loader, 
                   test_loader, 
-                  target_vol, 
-                  vol_scale_lkb: int | bool = False, 
+                  target_vol: float = 0.1, 
+                  vol_scale_lkb: int | None = None, 
                   loss_sharpe = True): 
     """lstm train/eval/predict pipeline""" 
     model_l = lstm.lstm(dim * 2, 
                         dim, 
                         hidden_dim = 128, 
                         sharpe_loss = loss_sharpe, 
-                        vol_scaling = vol_scale_lkb)
+                        volatility_lookback = vol_scale_lkb)
 
     params = {
         'vol_trg': target_vol, 
-        'vol_scale_lkb': vol_scale_lkb
     }
     if vol_scale_lkb: # true for any non-zero number
         model_set_attributes(model_l, params)
@@ -48,7 +47,10 @@ def lstm_pipeline(dim,
     # predict 
     res_model_l = model_l.lstm_evaluate(test_loader)
 
-    return res_model_l
+    return {
+        'model': model_l, 
+        'res': res_model_l, 
+    }
 
 
 def walk_forward_analysis(return_data, 
@@ -70,7 +72,6 @@ def walk_forward_analysis(return_data,
         oos_returns = return_data[cutoff: cutoff + oos_len, :]
         oos_prices = price_data[cutoff: cutoff + oos_len, :]
 
-        wfa_current_returns = return_data[cutoff] 
         # backtest
         backtest_configs.append(
             {
@@ -78,7 +79,6 @@ def walk_forward_analysis(return_data,
                 'wfa_in_sample_prices': is_prices, 
                 'wfa_out_of_sample_returns': oos_returns, 
                 'wfa_out_of_sample_prices': oos_prices,
-                'target_vol': 0.1,
                 'data_lookback': lookback, 
                 'tr_split': 0.9, # paper states test set 10% split
                 'cutoff': cutoff # save for data spliting
@@ -114,22 +114,25 @@ def backtest(config: dict[str]):
     })
 
     # prediction
-    res_model_l = lstm_pipeline(dim = is_returns.shape[1], 
-                                train_loader = loaders['train_loader'], 
-                                eval_loader = loaders['eval_loader'], 
-                                test_loader = loaders['test_loader'], 
-                                target_vol = target_vol)
+    model_pipe = lstm_pipeline(dim = is_returns.shape[1], 
+                               train_loader = loaders['train_loader'], 
+                               eval_loader = loaders['eval_loader'], 
+                               test_loader = loaders['test_loader'])
     
     return {
-        'model_predictions': res_model_l
+        'model': model_pipe['model'],
+        'model_predictions': model_pipe['res']
     }
 
 
 def aggregate_results(wfa_results: list[dict]): 
     """groups aggregated backtest data"""    
     # stack by bucket 
-    stacked = defaultdict(list)  
+    stacked = defaultdict(list) # wights/returns/vol_scale 
     for r in wfa_results: 
+        # model
+        stacked['model'].append(r['model'])
+        # model output
         for sub_key, arr in r['model_predictions'].items(): # loop over payload outputs
             stacked[sub_key].append(arr) # for each stack, cutoff will contain weights/returns/vol_scale
     
