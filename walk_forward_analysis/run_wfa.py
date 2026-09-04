@@ -48,10 +48,11 @@ def lstm_pipeline(dim,
     res_model_l = model_l.lstm_evaluate(test_loader)
 
     return {
-        'model': model_l, 
+        'model': model_l.model.to('cpu').state_dict(), 
+        'model_train_loss_container': model_l.tr_loss_container, 
+        'model_eval_loss_container': model_l.eval_loss_container, 
         'res': res_model_l, 
     }
-
 
 def walk_forward_analysis(return_data, 
                           price_data,
@@ -131,6 +132,8 @@ def aggregate_results(wfa_results: list[dict]):
     for r in wfa_results: 
         # model
         stacked['model'].append(r['model'])
+        stacked['model_train_loss_container'].append(r['model_train_loss_container'])
+        stacked['model_eval_loss_container'].append(r['model_eval_loss_container'])
         # model output
         for sub_key, arr in r['model_predictions'].items(): # loop over payload outputs
             stacked[sub_key].append(arr) # for each stack, cutoff will contain weights/returns/vol_scale
