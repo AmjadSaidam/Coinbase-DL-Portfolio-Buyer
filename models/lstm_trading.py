@@ -39,7 +39,7 @@ class lstm_model(nn.Module):
 
     def forward(self, 
                 x: torch.Tensor, 
-                weight_constraint: float | None) -> torch.Tensor:
+                weight_constraint: float | None = None) -> torch.Tensor:
         """
         Forwards Pass:
 
@@ -76,14 +76,12 @@ class lstm():
                  shorts: bool = False,
                  hidden_dim = 252, 
                  num_layers = 1, 
-                 vol_scaling: bool = False,
-                 volatility_lookback: int = None,
+                 volatility_lookback: int | None = None,
                  weight_constraint: float | None = None, 
                  sharpe_loss: bool = True): 
         self.device = get_device()
         self.model: lstm_model = lstm_model(input_dim, output_dim, shorts, hidden_dim, num_layers).to(self.device)
         self.w_min = weight_constraint
-        self.vol_scaling = vol_scaling
         self.vol_scale_lkb = volatility_lookback
         self.vol_trg = 0.0
         self.sharpe_loss = sharpe_loss
@@ -178,7 +176,8 @@ class lstm():
                 # forward pass
                 x_eval, y_eval, rt_eval, x_inv_eval, w_p, vol_scaler = self.__forward_pass(x_eval, y_eval, rt_eval, x_inv_eval)
                 
-                scaled_pos = torch.sum(w_p * vol_scaler, dim = 1) # inner product of weight and volatility vector
+                if self.vol_scale_lkb is not None:
+                    scaled_pos = torch.sum(vol_scaler, dim = 1) # inner product of weight and volatility vector
                 
                 # predicted returns
                 rt_p = self.__portfolio_returns(w_p, rt_eval)
@@ -205,7 +204,7 @@ class lstm():
 
         all_rt_p = torch.cat(all_rt_p, dim = 0).detach().cpu().numpy() # returns portfolio 
         all_w_p = torch.cat(all_w_p, dim = 0).detach().cpu().numpy()
-        all_vol_scale = torch.cat(all_vol_scale, dim = 0).detach().cpu().numpy() if self.vol_scaling else []
+        all_vol_scale = torch.cat(all_vol_scale, dim = 0).detach().cpu().numpy() if (self.vol_scale_lkb is not None) else []
 
         return {
             'weights': all_w_p, 
@@ -233,11 +232,11 @@ class lstm():
         # rt and inv feature 1 batch 
         rt = rt.to(self.device)
         x1_inv = x1_inv.to(self.device)
-        # forward pass
+        # forward pass - optimal model used if trained
         w_p = self.model(x, self.w_min)
         # output activation 
-        vol_scaler = torch.ones((1,), device = self.device)
-        if self.vol_scaling: 
+        vol_scaler = None
+        if self.vol_scale_lkb is not None: 
             vol_scaler = vol_scale(x1_inv, self.vol_trg, self.vol_scale_lkb)[:, -1, :] # (batch, lookback, features) -> last(batch, features)
             w_p = w_p * vol_scaler
         return x, y, rt, x1_inv, w_p, vol_scaler
