@@ -1,0 +1,40 @@
+[project]
+name = "coinbase-trading-bot"
+version = "0.1.0"
+description = "Add your description here"
+authors = [
+    { name = "Amjad Saidam", email = "amjadsaidama@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "coinbase-advanced-py==1.8.2",
+    "kagglehub==0.2.7",
+    "matplotlib==3.10.3",
+    "numpy==2.3.0",
+    "pandas==2.2.3",
+    "plotly==6.3.0",
+    "python-dotenv==0.14.0",
+    "python-telegram-bot==22.5",
+    "requests==2.32.3",
+    "schedule==1.2.2",
+    "scikit-learn==1.6.1",
+    "scipy==1.15.3",
+    "sparsemax==0.1.9",
+    "torch==2.7.1",
+    "tqdm==4.67.1",
+]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[project.scripts]
+coinbase-trading-bot = "coinbase_trading_bot:main"
+
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
