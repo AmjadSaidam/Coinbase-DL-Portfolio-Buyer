@@ -218,7 +218,7 @@ class lstm():
                             port_returns):
         """portfolio return, assume log returns"""
         prev_w_p = torch.cat((torch.zeros_like(port_weight[:1]), torch.roll(port_weight, shifts = 1, dims = 0)[:-1]))
-        return torch.log(torch.sum(port_weight * torch.exp(port_returns)), dim = -1) - self.cost * torch.sum(torch.abs(port_weight - prev_w_p), dim = 1)
+        return torch.log(torch.sum(port_weight * torch.exp(port_returns), dim = -1)) - self.cost * torch.sum(torch.abs(port_weight - prev_w_p), dim = 1)
 
     def __forward_pass(self, 
                        x, 
