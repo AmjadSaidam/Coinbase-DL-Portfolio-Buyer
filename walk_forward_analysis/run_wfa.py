@@ -165,7 +165,7 @@ if __name__ == '__main__':
 
     # GPU multiprocessing 
     ctx = mp.get_context('spawn')
-    with ctx.Pool(processes = 10) as pool:
+    with ctx.Pool(processes = 2) as pool:
         wfa_results = pool.map(backtest, configs)
 
     # outputs 
