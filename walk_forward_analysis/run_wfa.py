@@ -20,19 +20,21 @@ def model_set_attributes(model, params: dict):
     pass
 
 
-def lstm_pipeline(dim, 
-                  train_loader, 
-                  eval_loader, 
-                  test_loader, 
-                  target_vol: float = 0.1, 
-                  vol_scale_lkb: int | None = None, 
-                  loss_sharpe = True): 
-    """lstm train/eval/predict pipeline""" 
-    model_l = lstm.lstm(dim * 2, 
-                        dim, 
-                        hidden_dim = 128, 
-                        sharpe_loss = loss_sharpe, 
-                        volatility_lookback = vol_scale_lkb)
+def lstm_pipeline(dim,
+                  train_loader,
+                  eval_loader,
+                  test_loader,
+                  target_vol: float = 0.1,
+                  vol_scale_lkb: int | None = None,
+                  loss_sharpe = True,
+                  cost: float = 0.0):
+    """lstm train/eval/predict pipeline"""
+    model_l = lstm.lstm(dim * 2,
+                        dim,
+                        hidden_dim = 128,
+                        sharpe_loss = loss_sharpe,
+                        volatility_lookback = vol_scale_lkb,
+                        cost = cost)
 
     params = {
         'vol_trg': target_vol, 
@@ -44,8 +46,8 @@ def lstm_pipeline(dim,
     epochs = 100
     model_l.lstm_train(train_loader, eval_loader, n_epochs = epochs)
 
-    # predict 
-    res_model_l = model_l.lstm_evaluate(test_loader)
+    # predict - fee-free, so equity() can sweep fee tiers post-hoc without re-running the WFA
+    res_model_l = model_l.lstm_evaluate(test_loader, apply_cost = False)
 
     return {
         'model': model_l.model.to('cpu').state_dict(), 
@@ -54,10 +56,12 @@ def lstm_pipeline(dim,
         'res': res_model_l, 
     }
 
-def walk_forward_analysis(return_data, 
+def walk_forward_analysis(return_data,
                           price_data,
-                          lookback: int = 21, 
-                          split_len = 0.05) -> dict[str, dict[str: list]]: 
+                          lookback: int = 288,
+                          batch_size: int = 288,
+                          split_len = 0.05,
+                          cost: float = 0.0) -> dict[str, dict[str: list]]:
     """"""
     backtest_configs = []
 
@@ -80,9 +84,11 @@ def walk_forward_analysis(return_data,
                 'wfa_in_sample_prices': is_prices, 
                 'wfa_out_of_sample_returns': oos_returns, 
                 'wfa_out_of_sample_prices': oos_prices,
-                'data_lookback': lookback, 
+                'data_lookback': lookback,
+                'batch_size': batch_size,
                 'tr_split': 0.9, # paper states test set 10% split
-                'cutoff': cutoff # save for data spliting
+                'cutoff': cutoff, # save for data spliting
+                'cost': cost
             }
         )
     return backtest_configs
@@ -98,15 +104,19 @@ def backtest(config: dict[str]):
     
     # train defaults
     tr_split = config['tr_split']
+    lookback = config['data_lookback']
+    batch = config['batch_size']
+    cost = config['cost']
 
     # train and eval sets from in sample data 
     tr_returns, eval_returns = data_prep.train_test_split_time_series(is_returns, tr_split)
     tr_prices, eval_prices = data_prep.train_test_split_time_series(is_prices, tr_split)
 
-    # build loaders for wfa data
-    train_set = {'returns': tr_returns, 'prices': tr_prices}
-    eval_set = {'returns': eval_returns, 'prices': eval_prices}
-    test_set = {'returns': oos_returns, 'prices': oos_prices}
+    # data_pre_process() defaults
+    train_set = {'returns': tr_returns, 'prices': tr_prices, 'lookback': lookback, 'mini_batches': batch}
+    eval_set = {'returns': eval_returns, 'prices': eval_prices, 'lookback': lookback, 'mini_batches': batch}
+    test_set = {'returns': oos_returns, 'prices': oos_prices, 'lookback': lookback, 'mini_batches': batch}
+    # build loaders 
     loaders = data_prep.train_eval_test_loaders({
         'train': train_set, 
         'eval': eval_set, 
@@ -114,10 +124,11 @@ def backtest(config: dict[str]):
     })
 
     # prediction
-    model_pipe = lstm_pipeline(dim = is_returns.shape[1], 
-                               train_loader = loaders['train_loader'], 
-                               eval_loader = loaders['eval_loader'], 
-                               test_loader = loaders['test_loader'])
+    model_pipe = lstm_pipeline(dim = is_returns.shape[1],
+                               train_loader = loaders['train_loader'],
+                               eval_loader = loaders['eval_loader'],
+                               test_loader = loaders['test_loader'],
+                               cost = cost)
     
     return model_pipe
 
@@ -149,8 +160,8 @@ if __name__ == '__main__':
     x2 = torch.tensor(df_prices.to_numpy(), dtype = torch.float32)
 
     # wfa congifs 
-    dls_in_sample_split = 60 / 5 * 24 * 50 # number of 5min brs in 50 days 
-    configs = walk_forward_analysis(x1, x2, split_len = dls_in_sample_split)
+    dls_in_sample_split = 60 / 5 * 24 * 50 # number of 5min brs in 50 days
+    configs = walk_forward_analysis(x1, x2, split_len = dls_in_sample_split, cost = 0.0016) # advanced_4 tier, applied during training only - test predictions stay fee-free
 
     # GPU multiprocessing 
     ctx = mp.get_context('spawn')

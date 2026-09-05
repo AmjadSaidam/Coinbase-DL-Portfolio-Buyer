@@ -77,8 +77,9 @@ class lstm():
                  hidden_dim = 252, 
                  num_layers = 1, 
                  volatility_lookback: int | None = None,
-                 weight_constraint: float | None = None, 
-                 sharpe_loss: bool = True): 
+                 weight_constraint: float | None = None,
+                 sharpe_loss: bool = True,
+                 cost: float = 0.0):
         self.device = get_device()
         self.model: lstm_model = lstm_model(input_dim, output_dim, shorts, hidden_dim, num_layers).to(self.device)
         self.w_min = weight_constraint
@@ -91,7 +92,8 @@ class lstm():
         self.eval_loss = 0.0
         self.eval_loss_container = []
         self.opt_res = {}
-        self.cost = 0
+        self.cost = cost
+        self._prev_w = None # carries last weight across batches within one train/eval pass
         
     def lstm_train(self, 
                    train_loader: data.DataLoader,
@@ -111,6 +113,7 @@ class lstm():
             total_p = 0
             epoch_loss = 0
             self.tr_loss = 0
+            self._prev_w = None # each epoch restarts train_loader from t=0, so no prior position carries in
             for (x_tr, y_tr, rt_tr, x_inv_tr) in train_loader:
                 # send to devices 
                 x_tr, y_tr, rt_tr, x_inv_tr, w_p, _ = self.__forward_pass(x_tr, y_tr, rt_tr, x_inv_tr) # w_p of dim (batch, n_assets)
@@ -159,19 +162,25 @@ class lstm():
         # final loss
         self.avg_tr_loss = np.sum(self.tr_loss_container) / n_epochs 
 
-    def lstm_evaluate(self, 
-                      eval_loader: data.DataLoader) -> dict:
+    def lstm_evaluate(self,
+                      eval_loader: data.DataLoader,
+                      apply_cost: bool = True) -> dict:
         """set model in evaluation mode for out-of-sample predictions"""
-        all_rt_p = [] # pad vectors to account for lookback 
+        all_rt_p = [] # pad vectors to account for lookback
         all_w_p = []
         all_vol_scale = []
 
         self.eval_loss = 0
         total_p = 0
         scaled_pos = 0
-        
-        self.model.eval() # model in evaluation model 
-        with torch.no_grad(): # disable gradient tracking 
+        self._prev_w = None # fresh loader = fresh position, no prior period to compare against
+
+        prior_cost = self.cost
+        if not apply_cost:
+            self.cost = 0.0 # export raw, fee-free predictions so equity() can sweep fee tiers post-hoc
+
+        self.model.eval() # model in evaluation model
+        with torch.no_grad(): # disable gradient tracking
             for (x_eval, y_eval, rt_eval, x_inv_eval) in eval_loader:
                 # forward pass
                 x_eval, y_eval, rt_eval, x_inv_eval, w_p, vol_scaler = self.__forward_pass(x_eval, y_eval, rt_eval, x_inv_eval)
@@ -202,9 +211,11 @@ class lstm():
         # final loss
         self.eval_loss /= total_p
 
-        all_rt_p = torch.cat(all_rt_p, dim = 0).detach().cpu().numpy() # returns portfolio 
+        all_rt_p = torch.cat(all_rt_p, dim = 0).detach().cpu().numpy() # returns portfolio
         all_w_p = torch.cat(all_w_p, dim = 0).detach().cpu().numpy()
         all_vol_scale = torch.cat(all_vol_scale, dim = 0).detach().cpu().numpy() if (self.vol_scale_lkb is not None) else []
+
+        self.cost = prior_cost # restore, in case this instance is reused for another cost-aware pass
 
         return {
             'weights': all_w_p, 
@@ -217,8 +228,11 @@ class lstm():
                             port_weight, 
                             port_returns):
         """portfolio return, assume log returns"""
-        prev_w_p = torch.cat((torch.zeros_like(port_weight[:1]), torch.roll(port_weight, shifts = 1, dims = 0)[:-1]))
-        return torch.log(torch.sum(port_weight * torch.exp(port_returns), dim = -1)) - self.cost * torch.sum(torch.abs(port_weight - prev_w_p), dim = 1)
+        first_prev = self._prev_w if self._prev_w is not None else torch.zeros_like(port_weight[:1])
+        prev_w_p = torch.cat((first_prev, port_weight[:-1]))
+        self._prev_w = port_weight[-1:].detach()
+        turnover = torch.sum(torch.abs(port_weight - prev_w_p), dim = 1)
+        return torch.log(torch.sum(port_weight * torch.exp(port_returns), dim = -1)) + torch.log(1 - self.cost * turnover) # percentage of equity survived
 
     def __forward_pass(self, 
                        x, 
