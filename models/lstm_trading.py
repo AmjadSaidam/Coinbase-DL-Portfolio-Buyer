@@ -248,10 +248,10 @@ class lstm():
         x1_inv = x1_inv.to(self.device)
         # forward pass - optimal model used if trained
         w_p = self.model(x, self.w_min)
-        # output activation 
         vol_scaler = None
         if self.vol_scale_lkb is not None: 
             vol_scaler = vol_scale(x1_inv, self.vol_trg, self.vol_scale_lkb)[:, -1, :] # (batch, lookback, features) -> last(batch, features)
+            # add guard for volatilty 
             w_p = w_p * vol_scaler
         return x, y, rt, x1_inv, w_p, vol_scaler
 
@@ -284,7 +284,7 @@ def vol_scale(a: torch.Tensor,
             else:
                 subset = a[batch, t - vol_lookback: t, :] # (1, lookback_t, n_assets)
                 exenate_vol = torch.std(subset, dim = 0).clamp_min(eps) # (1, lookback_t), set min val to avoid div by zero error
-                vol_t = target_vol / exenate_vol # levergae
+                vol_t = torch.clamp(target_vol / exenate_vol, max = 1.0) # de-risk only: never scale a position above its Sparsemax weight
                 current_scale = alpha * vol_t + (1 - alpha) * prev_scale # ema 
             time_outputs.append(current_scale)
             prev_scale = current_scale
