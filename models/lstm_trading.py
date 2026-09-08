@@ -267,18 +267,20 @@ def vol_scale(a: torch.Tensor,
     """
     g, h, k = a.shape # batch, sequence_length, n_assets
 
+    # guard index error, from vol-scaler estimate from last value only 
     if vol_lookback > h-1:
-        vol_lookback = h-1 # so dimensions always match
+        vol_lookback = h-1 
     
     batch_outputs = []
     eps = 1e-8
 
     alpha = 2 / (vol_lookback + 1) # half life
     for batch in range(g):
-        time_outputs = []
+        batch_vol_scalers = []
         prev_scale = torch.ones(k, device = a.device, dtype = a.dtype) # (n_assets, )
-        time_outputs.append(prev_scale) 
+        batch_vol_scalers.append(prev_scale) 
         for t in range(1, h): 
+            # if index less than lookback, return 1.0
             if t < vol_lookback:
                 current_scale = prev_scale # vol_t is 1 if t < lookback
             else:
@@ -286,8 +288,8 @@ def vol_scale(a: torch.Tensor,
                 exenate_vol = torch.std(subset, dim = 0).clamp_min(eps) # (1, lookback_t), set min val to avoid div by zero error
                 vol_t = torch.clamp(target_vol / exenate_vol, max = 1.0) # de-risk only: never scale a position above its Sparsemax weight
                 current_scale = alpha * vol_t + (1 - alpha) * prev_scale # ema 
-            time_outputs.append(current_scale)
+            batch_vol_scalers.append(current_scale)
             prev_scale = current_scale
-        batch_outputs.append(torch.stack(time_outputs, dim = 0))
+        batch_outputs.append(torch.stack(batch_vol_scalers, dim = 0))
 
     return torch.stack(batch_outputs, dim = 0)
