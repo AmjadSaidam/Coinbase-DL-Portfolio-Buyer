@@ -47,15 +47,10 @@ class lstm_model(nn.Module):
         Output: dim(x) = (batch_size, sequence_length, output_size = n_assets)
         """
         # (batch, sequence, hidden) -> (batch, sequence, n_assets)
-        output, (hn, cn) = self.lstm(x)
-        # attention 
-        hidden = output[:, -1, :].unsqueeze(2) # adds t dimension
-        scores = torch.bmm(output, hidden)
-        alpha = torch.softmax(scores, dim = 1)
-        context = (alpha * output).sum(dim = 1)
+        _, (hn, cn) = self.lstm(x)
         # to weights
-        output = self.linear(context) # (batch, n_assets)
-        final_output = self.output(output) # bound weights 
+        output = self.linear(hn[-1]) # last layer's final hidden state, (batch, n_assets)
+        final_output = self.output(output) # bound weights
 
         # weight constraint
         if self.shorts:
@@ -67,9 +62,7 @@ class lstm_model(nn.Module):
         return final_output # last prediction in batch at t=lookback, this will yeild output dim = n_assets
     
 class lstm():
-    """
-    instentiate, train and predict using lstm model 
-    """
+    """instentiate, train and predict using lstm model"""
     def __init__(self, 
                  input_dim: int, 
                  output_dim: int, 
@@ -258,38 +251,36 @@ class lstm():
 # ---------------------------------------------
 # Volatility Scaling 
 # ---------------------------------------------
-def vol_scale(a: torch.Tensor, 
-              target_vol: float, 
-              vol_lookback) -> torch.Tensor: 
+def vol_scale(a: torch.Tensor,
+              target_vol: float,
+              vol_lookback) -> torch.Tensor:
     """
-    exponential weighted moving average of standard deviation of asset returns 
-    returns matrix same size as input 
+    exponential weighted moving average of standard deviation of asset returns
+    returns matrix same size as input
     """
     g, h, k = a.shape # batch, sequence_length, n_assets
 
-    # guard index error, from vol-scaler estimate from last value only 
+    # guard index error, from vol-scaler estimate from last value only
     if vol_lookback > h-1:
-        vol_lookback = h-1 
-    
-    batch_outputs = []
+        vol_lookback = h-1
+
     eps = 1e-8
-
     alpha = 2 / (vol_lookback + 1) # half life
-    for batch in range(g):
-        batch_vol_scalers = []
-        prev_scale = torch.ones(k, device = a.device, dtype = a.dtype) # (n_assets, )
-        batch_vol_scalers.append(prev_scale) 
-        for t in range(1, h): 
-            # if index less than lookback, return 1.0
-            if t < vol_lookback:
-                current_scale = prev_scale # vol_t is 1 if t < lookback
-            else:
-                subset = a[batch, t - vol_lookback: t, :] # (1, lookback_t, n_assets)
-                exenate_vol = torch.std(subset, dim = 0).clamp_min(eps) # (1, lookback_t), set min val to avoid div by zero error
-                vol_t = torch.clamp(target_vol / exenate_vol, max = 1.0) # de-risk only: never scale a position above its Sparsemax weight
-                current_scale = alpha * vol_t + (1 - alpha) * prev_scale # ema 
-            batch_vol_scalers.append(current_scale)
-            prev_scale = current_scale
-        batch_outputs.append(torch.stack(batch_vol_scalers, dim = 0))
 
-    return torch.stack(batch_outputs, dim = 0)
+    # batches are independent (no cross-batch state), so vectorise across the batch
+    # dimension and only loop over time, which carries the genuine EMA recurrence
+    vol_scalers = [torch.ones(g, k, device = a.device, dtype = a.dtype)] # (batch, n_assets), t = 0
+    prev_scale = vol_scalers[0]
+    for t in range(1, h):
+        # if index less than lookback, return 1.0
+        if t < vol_lookback:
+            current_scale = prev_scale # vol_t is 1 if t < lookback
+        else:
+            subset = a[:, t - vol_lookback: t, :] # (batch, lookback_t, n_assets)
+            exenate_vol = torch.std(subset, dim = 1).clamp_min(eps) # (batch, n_assets), set min val to avoid div by zero error
+            vol_t = torch.clamp(target_vol / exenate_vol, max = 1.0) # de-risk only: never scale a position above its Sparsemax weight
+            current_scale = alpha * vol_t + (1 - alpha) * prev_scale # ema
+        vol_scalers.append(current_scale)
+        prev_scale = current_scale
+
+    return torch.stack(vol_scalers, dim = 1) # (batch, sequence_length, n_assets)
