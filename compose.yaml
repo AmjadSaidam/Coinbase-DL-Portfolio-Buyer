@@ -1,66 +1,35 @@
-# Comments are provided throughout this file to help you get started.
-# If you need more help, visit the Docker Compose reference guide at
+# .yaml built from Dockerfile
+# help:
 # https://docs.docker.com/go/compose-spec-reference/
 
-# Here the instructions define your application as a service called "server".
-# This service is built from the Dockerfile in the current directory.
-# You can add other services your application may depend on here, such as a
-# database or a cache. For examples, see the Awesome Compose repository:
-# https://github.com/docker/awesome-compose
-
 # use .:/app user volume, so user of container has write permissions 
+# command line run prompt (either): 
+# >>> docker compose up --build
+# >>> docker compose up --build service1 service2
+# for code changes
+# >>> docker compose restart service1 && docker compose restart service2
 
 services:
-  service1: 
-    build: . 
+  service1:
+    build: .
     command: ['python', 'telegram_bot.py']
     container_name: telegram_bot
+    env_file:
+      - .env
     ports:
       - "8000:8000"
     volumes:
       - .:/app
-  
+      - /app/.venv # anonymous volume: keeps the image's installed deps from being hidden by the bind mount above
+
   service2:
       build: .
-      command: ['python', 'market_algorithm.py']
-      container_name: strategy 
+      command: ['python', '-m', 'live_trading.run_live']
+      container_name: strategy
+      env_file:
+        - .env
       ports:
         - "9000:9000"
-      volumes: 
+      volumes:
         - .:/app
-
-# run from command line: docker compose up --build 
-
-# The commented out section below is an example of how to define a PostgreSQL
-# database that your application can use. `depends_on` tells Docker Compose to
-# start the database before your application. The `db-data` volume persists the
-# database data between container restarts. The `db-password` secret is used
-# to set the database password. You must create `db/password.txt` and add
-# a password of your choosing to it before running `docker compose up`.
-#     depends_on:
-#       db:
-#         condition: service_healthy
-#   db:
-#     image: postgres
-#     restart: always
-#     user: postgres
-#     secrets:
-#       - db-password
-#     volumes:
-#       - db-data:/var/lib/postgresql/data
-#     environment:
-#       - POSTGRES_DB=example
-#       - POSTGRES_PASSWORD_FILE=/run/secrets/db-password
-#     expose:
-#       - 5432
-#     healthcheck:
-#       test: [ "CMD", "pg_isready" ]
-#       interval: 10s
-#       timeout: 5s
-#       retries: 5
-# volumes:
-#   db-data:
-# secrets:
-#   db-password:
-#     file: db/password.txt
-
+        - /app/.venv # anonymous volume: keeps the image's installed deps from being hidden by the bind mount above
