@@ -72,12 +72,18 @@ class CoinbaseTrader:
         dict_payloads = defaultdict(list) # dict of lists of product candle data dicts
 
         # time-range in seconds
-        step = utils.granularity_seconds[granularity] * 350 # max persisted query requets
+        gran_secs = utils.granularity_seconds[granularity]
+        step = gran_secs * 350 # max persisted query requets
         # time range, start, end time
-        self.end_date = datetime.datetime.now()
-        self.start_date = self.end_date - pd.Timedelta(value = num_bars, unit = 'm')
-        start_epoch = int(pd.Timestamp(self.start_date).timestamp())
-        end_epoch = int(pd.Timestamp(self.end_date).timestamp())
+        # floor both bounds to the granularity boundary: Coinbase only returns
+        # complete candle buckets, so an unaligned start/end causes every row of the
+        # reindex grid below to fall between real candle timestamps (all-NaN data)
+        now_epoch = int(datetime.datetime.now().timestamp())
+        end_epoch = now_epoch - (now_epoch % gran_secs) # floor to current end 5m bar
+        start_epoch = end_epoch - int(pd.Timedelta(value = num_bars, unit = 'm').total_seconds()) # floor to current start 5m bar
+        start_epoch -= start_epoch % gran_secs
+        self.end_date = pd.Timestamp(end_epoch, unit = 's', tz = 'UTC')
+        self.start_date = pd.Timestamp(start_epoch, unit = 's', tz = 'UTC')
 
         # pagnate over assets
         for product in products:
