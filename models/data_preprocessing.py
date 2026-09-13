@@ -9,16 +9,11 @@ from sklearn.preprocessing import StandardScaler
 # Data Pre-Processing
 # =============================================
 def pad(returns: np.ndarray, lookback: int) -> np.ndarray:
-    """
-    zero left pad output function to get equal size vectot as input after laged by lookback
-    """
+    """zero left pad output function to get equal size vectot as input after laged by lookback"""
     return np.pad(returns, constant_values = 0, pad_width = (lookback, 0))
 
 def tensor_standardise(x: torch.Tensor, axis: int = 0) -> torch.Tensor:
-    """
-    z-score normalisation (does not brake computation graph)
-    standerdise per asset (column) or cross section (row)
-    """
+    """z-score normalisation (does not brake computation graph) standerdise per asset (column) or cross section (row)"""
     if isinstance(x, np.ndarray):
         x = torch.tensor(x, dtype = torch.float32)
     eps = 1e-8
@@ -31,9 +26,7 @@ def tensor_standardise(x: torch.Tensor, axis: int = 0) -> torch.Tensor:
 
 # standerdise inputs
 def standerdise(x: np.ndarray) -> list[np.ndarray, np.ndarray]:
-    """
-    z-score row normlaisation (brakes computation graph)
-    """
+    """z-score row normlaisation (brakes computation graph)"""
     res = None
     scaler = StandardScaler()
 
@@ -47,9 +40,7 @@ def standerdise(x: np.ndarray) -> list[np.ndarray, np.ndarray]:
 
 # (NOT USED)
 def difference(series: np.ndarray):
-    """
-    make price series stationary process by differencing
-    """
+    """make price series stationary process by differencing"""
     series = pd.DataFrame(series)
     asset_prices_shift = series.shift(1).bfill() # fill na's with last value
     stationary_returns = series - asset_prices_shift
@@ -58,17 +49,14 @@ def difference(series: np.ndarray):
 
 # (NOT USED)
 def function_to_lstm_batch(x: torch.Tensor, f):
-    """
-    applies function to LSTM batch
-    """
+    """applies function to LSTM batch"""
     batches = [f(x[i]) for i in range(x.size(0))]
     return torch.stack(batches, dim = 0)
 
 # gets training and test data from entire dataset
-def train_test_split_time_series(data, 
-                                 train_size = 0.7):
-    """ Train Test Split Function:
-    """
+def train_test_split_time_series(data: torch.Tensor, 
+                                 train_size = 0.7) -> tuple[np.ndarray]:
+    """ Train Test Split Function:"""
     if isinstance(data, pd.DataFrame):
         data = np.array(data)
     train, test = train_test_split(data, train_size = train_size, shuffle = False)
@@ -81,12 +69,13 @@ def prepare_features(asset_returns: np.ndarray,
                      target_returns: np.ndarray | None,
                      lookback: int) -> tuple[torch.Tensor]:
     """
-    split data using rolling lookback, must be called after train/eval/test splits to avoid lookahead bias \\
-    Eg
-    X = [t1, t2, t3, t4, t5] \\
+    split data using rolling lookback, must be called after train/eval/test splits to avoid lookahead bias\n
+    
+    Eg) for X = [t1, t2, t3, t4, t5] \\
     a = [t1, t2, t3] \\
-    b = [t2, t3, t4] \\
-    if I split, making a = train and b = test, then I introduce lookahead bias
+    b = [t2, t3, t4] \n
+    
+    If I split, making a = train and b = test, then I introduce lookahead bias
     If I split before then stack all splits will be [) and [), so no look ahead bias
     """
     n_timesteps = asset_returns.shape[0]
@@ -146,10 +135,12 @@ def data_pre_process(returns: np.ndarray,
     return data.DataLoader(data.TensorDataset(x, y, x_last, x_inv), shuffle = False, batch_size = mini_batches, drop_last = drop_last)
 
 def train_eval_test_loaders(loaders: dict[str]):
-    """returns train, evaluation and test loaders"""
+    """returns train, evaluation and test loaders (if provided for backtest wfa)"""
     tr_loader = data_pre_process(**loaders['train'])
     eval_loader = data_pre_process(**loaders['eval'])
-    ts_loader = data_pre_process(**loaders['test'])
+    ts_loader = None 
+    if loaders.get('test') is not None:
+        ts_loader = data_pre_process(**loaders['test'])
 
     return {
         'train_loader': tr_loader, 
