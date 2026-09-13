@@ -5,36 +5,37 @@ import requests
 from requests.exceptions import HTTPError
 import pandas as pd
 import time
-
-# default inputs
-data_frequencies = ['UNKNOWN_GRANULARITY', 
-                    'ONE_MINUTE', 
-                    'FIVE_MINUTE', 
-                    'FIFTEEN_MINUTE', 
-                    'THIRTY_MINUTE', 
-                    'ONE_HOUR', 
-                    'TWO_HOUR', 
-                    'FOUR_HOUR', 
-                    'SIX_HOUR', 
-                    'ONE_DAY']
+# .py
+import data_loaders.utils as utils
 
 candle_limit = 350
-
 request_limit = 10000
 
-# seconds per candle, keyed by granularity
-granularity_seconds = {
-    'ONE_MINUTE': 60,
-    'FIVE_MINUTE': 300,
-    'FIFTEEN_MINUTE': 900,
-    'THIRTY_MINUTE': 1800,
-    'ONE_HOUR': 3600,
-    'TWO_HOUR': 7200,
-    'FOUR_HOUR': 14400,
-    'SIX_HOUR': 21600,
-    'ONE_DAY': 86400,
-}
+# filter data
+def data_standerdise(data_payload: list[dict] | dict[list], 
+                     symbol: str, 
+                     start_epoch: int, 
+                     end_epoch: int, 
+                     granularity: str):
+    """forms dataframe with time index, cleans data and aligns index to time range"""
+    data = pd.DataFrame(data_payload)
+    data['start'] = pd.to_datetime(data['start'].astype(int), unit = 's', utc = True)
+    data.set_index('start', inplace = True)
+    data = data.astype(float) # OHLCV fields come back as strings from the API; CSV round-trips infer this implicitly, live callers do not
+    data = data[~data.index.duplicated(keep = 'first')]
+    data.sort_index(inplace = True) # guard against any residual out-of-order rows across window boundaries
 
+    # reindex onto the full expected grid so every symbol returns the same number of rows
+    expected_index = pd.date_range(start = pd.Timestamp(start_epoch, unit = 's', tz = 'UTC'),
+                                    end = pd.Timestamp(end_epoch, unit = 's', tz = 'UTC'),
+                                    freq = pd.Timedelta(seconds = utils.granularity_seconds[granularity]))
+    if data.index.min() > expected_index[0]:
+        print(f"warning: {symbol} has no data before {data.index.min()} "
+            f"(likely not listed/traded yet at {expected_index[0]}); ")
+    data = data.reindex(expected_index)
+    data = data.ffill() # fill genuine no-trade gaps with the last best know price
+
+    return data
 
 def process_requests(request_path: str,
                      requests_input: dict[str],
@@ -65,13 +66,13 @@ def get_coinbase_candles(data_download_path: str,
     if file_path is not None and os.path.exists(file_path):
         return None
 
-    if granularity not in data_frequencies:
-        raise ValueError(f'{granularity} not valid frequency, must be one of {data_frequencies}')
+    if granularity not in utils.data_frequencies:
+        raise ValueError(f'{granularity} not valid frequency, must be one of {utils.data_frequencies}')
     if not (0 < request_size <= candle_limit):
         raise ValueError(f'request_size must be in (0, {candle_limit}]')
 
     # timeframe in max-request seconds
-    step = granularity_seconds[granularity] * request_size
+    step = utils.granularity_seconds[granularity] * request_size
 
     # candles API uses unix seconds, not milliseconds
     start_epoch = int(pd.Timestamp(start_date).timestamp())
@@ -112,22 +113,7 @@ def get_coinbase_candles(data_download_path: str,
         window_start = window_end
         time.sleep(request_delay)
 
-    # filter data
-    data = pd.DataFrame(dict_payloads)
-    data['start'] = pd.to_datetime(data['start'].astype(int), unit = 's', utc = True)
-    data.set_index('start', inplace = True)
-    data = data[~data.index.duplicated(keep = 'first')]
-    data.sort_index(inplace = True) # guard against any residual out-of-order rows across window boundaries
-
-    # reindex onto the full expected grid so every symbol returns the same number of rows
-    expected_index = pd.date_range(start = pd.Timestamp(start_epoch, unit = 's', tz = 'UTC'),
-                                    end = pd.Timestamp(end_epoch, unit = 's', tz = 'UTC'),
-                                    freq = pd.Timedelta(seconds = granularity_seconds[granularity]))
-    if data.index.min() > expected_index[0]:
-        print(f"warning: {symbol} has no data before {data.index.min()} "
-              f"(likely not listed/traded yet at {expected_index[0]}); ")
-    data = data.reindex(expected_index)
-    data = data.ffill() # fill genuine no-trade gaps with the last best know price
+    data = data_standerdise(dict_payloads, symbol, start_epoch, end_epoch, granularity)
 
     # save data
     if data_download_path is not None:
