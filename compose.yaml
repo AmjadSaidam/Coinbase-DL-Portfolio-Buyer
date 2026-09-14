@@ -1,17 +1,28 @@
-# .yaml built from Dockerfile
+# --- INFO ---
+# .yaml built from Dockerfile for project containerisation 
 # help:
 # https://docs.docker.com/go/compose-spec-reference/
 
-# use .:/app user volume, so user of container has write permissions 
-# command line run prompt (either): 
+# command line run prompt (either), run only for DockerFile/.yaml changes: 
 # >>> docker compose up --build
 # >>> docker compose up --build service1 service2
-# for code changes
-# >>> docker compose restart service1 && docker compose restart service2
 
+# for code changes (last for both):
+# >>> docker compose up -d service1
+# >>> docker compose up -d service2
+# >>> docker compose up -d service1 service2
+
+# --- DOCKERFILE IMAGES LOGIC ---
 services:
   service1:
-    build: .
+    build:
+      context: .
+      # matches the appuser uid/gid to the host user so writes to bind-mounted, host-owned files
+      # (shut_down_state.json etc.) don't hit sqlite3.OperationalError: attempt to write a readonly
+      # database; HOST_UID/HOST_GID come from .env (defaults here are this machine's `id -u`/`id -g`)
+      args:
+        UID: ${HOST_UID:-501}
+        GID: ${HOST_GID:-20}
     command: ['python', 'telegram_bot.py']
     container_name: telegram_bot
     env_file:
@@ -19,12 +30,16 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - .:/app
+      - .:/app # .:/app user volume, so user of container has write permissions
       - /app/.venv # anonymous volume: keeps the image's installed deps from being hidden by the bind mount above
 
   service2:
-      build: .
-      command: ['python', '-m', 'live_trading.run_live']
+      build:
+        context: .
+        args:
+          UID: ${HOST_UID:-501}
+          GID: ${HOST_GID:-20}
+      command: ['python', '-m', 'live_trading.live_loop']
       container_name: strategy
       env_file:
         - .env
@@ -32,4 +47,4 @@ services:
         - "9000:9000"
       volumes:
         - .:/app
-        - /app/.venv # anonymous volume: keeps the image's installed deps from being hidden by the bind mount above
+        - /app/.venv
