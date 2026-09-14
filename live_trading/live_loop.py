@@ -94,7 +94,7 @@ def run_live_loop(asset_universe: list[str],
     obv_db = _sql_database(database_name = database, name_data = 'observed_weights', asset_universe = asset_universe) # actual invested amount
 
     # call coinbase account manager
-    coin = CoinbaseTrader(api_key, api_secret)
+    coin = CoinbaseTrader(api_key, api_secret) # reads api key from .env
     # attempt account connection
     while True:
         try:
@@ -106,6 +106,9 @@ def run_live_loop(asset_universe: list[str],
             _attempt_reconnect(coin)
     # log INFO type to live_trades.log
     live_trading.info(f"successfully connected to coinbase-advanced, API link open and read for GET/POST")
+
+    # log defaults 
+    logged_regime_flag = False 
 
     while True:
         try:
@@ -215,6 +218,13 @@ def run_live_loop(asset_universe: list[str],
                 # log to loggers 
                 live_trading.info('successfully rebalanced portfolio')
                 live_logging.trades_logger('trades', 'portfolio rebalance', model_port_weights = w_pred_adj, turnover = order_payload['weight_diffs'], account_balance = order_payload['account_balance'])
+                # reset flaged trade on 
+                logged_regime_flag = False 
+            else: 
+                # only write flaged trades on switch 
+                if not logged_regime_flag:
+                    live_trading.info('regime state false, skipping portfolio rebalance')
+                    logged_regime_flag = True
 
             # log all weights (flagged/unflagged) to database dataframes 
             pred_db.list_to_data(weights = w_pred_adj)
@@ -232,7 +242,7 @@ def run_live_loop(asset_universe: list[str],
             live_trading.error(f'failed exchange order post: {e}')
 
         except Exception as e:
-            live_trading.critical(f'untracked expected error: {e}')
+            live_trading.critical(f'unkown error: {e}', exc_info = True)
 
         # poll
         time.sleep(1)
@@ -271,4 +281,7 @@ def _sql_database(database_name: str,
 
 # --- RUN PIPELINE ---
 if __name__ == '__main__':
-    pass
+    asset_universe = [
+        'BTC-GBP', 'ETH-GBP', 'SOL-GBP', 'LINK-GBP', 'USDT-GBP'
+    ]
+    run_live_loop(asset_universe = asset_universe)
