@@ -80,8 +80,8 @@ def prepare_features(asset_returns: np.ndarray,
     """
     n_timesteps = asset_returns.shape[0]
 
-    # deal with insufficient data
-    if n_timesteps < lookback:
+    # deal with insufficient data (need at least one timestep after the lookback window)
+    if n_timesteps <= lookback:
         raise ValueError("lookback must be less than timeseries length")
 
     # feature and target label arrays
