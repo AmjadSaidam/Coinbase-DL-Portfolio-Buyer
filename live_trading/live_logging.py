@@ -13,6 +13,7 @@ def logger_setup(root_path: str,
     """instentiates loggers, and creates folder/files. Formatting true loggers intended for debuging/warning/error"""
     # check directory exists
     os.makedirs(root_path, exist_ok = True) # create logs folder
+    name += '.txt'
     save_path = os.path.join(root_path, name)
 
     logger = logging.getLogger(name) # module name when imported 
