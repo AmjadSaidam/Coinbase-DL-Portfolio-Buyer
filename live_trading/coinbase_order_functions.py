@@ -11,18 +11,18 @@ note difference between RESTClient and Websocket
 - RESTClient (Rest) = request (get/post) endpoints 
 - WSClient (Web Socket) = request (get/post) live-market data endpoints
 """
-import os 
 from dotenv import load_dotenv; load_dotenv()
 import time
-from coinbase.rest import RESTClient # Install Coinbase Advanced API Python SDK  
+from coinbase.rest import RESTClient # Install Coinbase Advanced API Python SDK
+from requests.exceptions import RequestException
 import uuid
-import datetime 
+import datetime
 from collections import defaultdict
 import pandas as pd
 from decimal import Decimal
 # .py
 import live_trading.live_errors as coin_error
-from data_loaders.coinbase_data import data_standerdise
+from data_loaders.coinbase_data import data_standerdise, candle_limit
 from data_loaders.coinbase_data_post_process import coinbase_price_return_data
 import data_loaders.utils as utils
 
@@ -30,9 +30,10 @@ class CoinbaseTrader:
     def __init__(self, api_key, api_secret):
         self.api_key = api_key
         self.api_secret = api_secret
-        self.client = RESTClient(api_key = api_key, api_secret = api_secret)
+        self.client = RESTClient(api_key = api_key, api_secret = api_secret, timeout = 30) # SDK default is no timeout - a stalled connection would block forever with no exception raised
         self.authenticated = False
         self.cash = 0
+        self._unpriceable_bases = set() # bases with no valid {base}-GBP product (delisted/renamed/fiat/unsupported), cached to avoid repeat failed requests
     
     def login(self):
         """Authentication function"""
@@ -62,44 +63,55 @@ class CoinbaseTrader:
         asset = self.get_base(asset)
         return account_values[asset] # asset associted holding, e.g. BTC-USD -> BTC: x  
 
-    def coinbase_data(self, 
-                      products: list[str], 
-                      num_bars: int = 1440, 
-                      granularity: str = 'FIVE_MINUTE', 
-                      request_delay: float = 0.2): 
+    def coinbase_data(self,
+                      products: list[str],
+                      num_bars: int = 1440,
+                      granularity: str = 'FIVE_MINUTE',
+                      request_delay: float = 0.2,
+                      max_retries: int = 5):
         """gets close and return data from exchange, supports 1min"""
         # final dataframe
         dict_payloads = defaultdict(list) # dict of lists of product candle data dicts
 
         # time-range in seconds
         gran_secs = utils.granularity_seconds[granularity]
-        step = gran_secs * 350 # max persisted query requets
+        step = gran_secs * (candle_limit - 1) # start/end are both inclusive: exactly candle_limit bar opens per request, one more and the API silently drops the oldest candle
         # time range, start, end time
-        # floor both bounds to the granularity boundary: Coinbase only returns
-        # complete candle buckets, so an unaligned start/end causes every row of the
-        # reindex grid below to fall between real candle timestamps (all-NaN data)
         now_epoch = int(datetime.datetime.now().timestamp())
-        end_epoch = now_epoch - (now_epoch % gran_secs) # floor to current end 5m bar
-        start_epoch = end_epoch - int(pd.Timedelta(value = num_bars, unit = 'm').total_seconds()) # floor to current start 5m bar
-        start_epoch -= start_epoch % gran_secs
+        end_epoch = now_epoch - (now_epoch % gran_secs) # floor to get current overlap and subtracked from live tiem to get latest bar open
+        start_epoch = end_epoch - num_bars * gran_secs
         self.end_date = pd.Timestamp(end_epoch, unit = 's', tz = 'UTC')
         self.start_date = pd.Timestamp(start_epoch, unit = 's', tz = 'UTC')
 
         # pagnate over assets
         for product in products:
             window_start = start_epoch
-            while window_start < end_epoch:
+            while window_start <= end_epoch:
                 window_end = min(window_start + step, end_epoch) # right pointer
-                candles = self.client.get_public_candles(
-                    product_id = product,
-                    start = window_start,
-                    end = window_end,
-                    granularity = granularity
-                )
+
+                retries = 0
+                while True:
+                    try:
+                        candles = self.client.get_public_candles(
+                            product_id = product,
+                            start = window_start,
+                            end = window_end,
+                            granularity = granularity
+                        )
+                        break # successful pull, break retry loop
+                    except RequestException as e:
+                        status = e.response.status_code if e.response is not None else None # None for a timeout/connection error (no response received)
+                        if (status is None or status in (429, 500, 502, 503, 504)) and retries < max_retries:
+                            retries += 1
+                            print(f'{product} rate limited/server error ({status}), retrying ({retries}/{max_retries}) after {request_delay}s')
+                            time.sleep(request_delay)
+                            continue
+                        raise coin_error.CoinDataError(f'{product} failed data pull in range {window_start}-{window_end}: {e}') from e
+
                 if candles is None:
                     raise coin_error.CoinDataError(f'{product} failed data pull in range {window_start}-{window_end}')
                 # assumeing error not raised
-                window_start = window_end # shift left pointer
+                window_start = window_end + gran_secs # shift left pointer to the bar after this inclusive window
                 # append payload, SDK returns typed Candle objects not raw dicts
                 dict_payloads[product].extend([candle.to_dict() for candle in candles['candles']])
                 # throttle
@@ -119,9 +131,7 @@ class CoinbaseTrader:
         }
 
     def get_user_accounts(self) -> dict[float]:
-        """
-        get base value invested for each asset in portfolio
-        """
+        """get base value invested for each asset in portfolio"""
         accounts = self.client.get_accounts() # all authenticated user accounts
         account_values = {}
         for account in accounts['accounts']:
@@ -132,10 +142,11 @@ class CoinbaseTrader:
         return account_values
         
     def get_asset_changes_price(self, assets: list):
-        """
-        price and 24hr price percentage change for each asset in portfolio 
-        """
-        change_price = {"change": [], "price": []}
+        """price and 24hr price percentage change for each asset in portfolio """
+        change_price = {
+            "change": [], 
+            "price": []
+        }
         for asset in assets:
             try:
                 product = self.client.get_product(product_id = asset) # product endpoint data
@@ -197,9 +208,16 @@ class CoinbaseTrader:
         loops over portfolio and calculates all investments in QUOTE (GBP), e.g. [GBP-BTC: 0.5, GBP-SOL: 2] = [BTC-GBP: 40,000, SOL-GBP: 400]
         """
         accounts = self.get_user_accounts()
-        self.cash = accounts.get('GBP', 0) # get GBP else return 0 
-        invested = sum([self.base_to_quote(accounts, key) for key in accounts.keys() if key != 'GBP']) # always in terms of BASE, transfer to QUOTE to standerdise
-        return float(invested + self.cash) 
+        self.cash = accounts.get('GBP', 0) # get GBP else return 0
+        invested = 0.0
+        for key in accounts.keys():
+            if key == 'GBP' or key in self._unpriceable_bases:
+                continue
+            try:
+                invested += self.base_to_quote(accounts, key) # always in terms of BASE, transfer to QUOTE to standerdise
+            except coin_error.CoinDataError:
+                self._unpriceable_bases.add(key) # no priceable {key}-GBP pair (delisted/renamed/fiat/unsupported) - exclude from valuation going forward
+        return float(invested + self.cash)
 
     def get_real_weights(self, portfolio_tickers) -> list[float]:
         """will get the weight of each specified asset in the portfolio"""
@@ -360,10 +378,17 @@ class CoinbaseTrader:
         # otherwise their value is never converted to cash and BUY orders below can starve for funds
         strategy_bases = {self.get_base(ticker) for ticker in portfolio_ticker_weights}
         for base, qty in accounts.items():
-            if base not in strategy_bases and qty > 0:
-                orders.append(
-                    self.modify_asset_order(asset = f"{base}-{account_base}", total_pf_value = None, full_close = True)
-                )
+            if base not in strategy_bases and qty > 0 and base not in self._unpriceable_bases:
+                asset = f"{base}-{account_base}"
+                try:
+                    orders.append(
+                        self.modify_asset_order(asset = asset, total_pf_value = None, full_close = True)
+                    )
+                except (coin_error.CoinDataError, coin_error.CoinOrderError):
+                    # holding has no tradeable {base}-{account_base} pair (delisted/renamed/unsupported)
+                    # or the close order was rejected - skip it rather than aborting the whole rebalance
+                    self._unpriceable_bases.add(base) # add to cached unpricable bases
+                    continue
 
         for key, new_weight in portfolio_ticker_weights.items():
             # check if not invested. If invested (initilise portfolio), otherwise rebalance portfolio
