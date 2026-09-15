@@ -8,6 +8,7 @@ import logging
 from dotenv import load_dotenv; load_dotenv()
 from datetime import datetime
 import numpy as np
+import pandas as pd
 import time
 import json
 import torch
@@ -110,6 +111,9 @@ def run_live_loop(asset_universe: list[str],
     # log defaults 
     logged_regime_flag = False 
 
+    # per 5min check 
+    latest_bar_time = None
+
     while True:
         try:
             # time vars
@@ -117,9 +121,10 @@ def run_live_loop(asset_universe: list[str],
             # wfa
             run_wfa = time_last_wfa is None or (current_time - time_last_wfa).days >= 1
             if run_wfa:
-                # data
+                # data (only include closed historical bars)
                 data = coin.coinbase_data(asset_universe, num_bars = is_fold_len)
-                df_pr, df_rt = data['prices'], data['returns']
+                df_pr = data['prices'].iloc[: -1, :]
+                df_rt = data['returns'].iloc[: -1, :]
                 # features
                 x_price = torch.tensor(df_pr.to_numpy(), dtype = torch.float32)
                 x_return = torch.tensor(df_rt.to_numpy(), dtype = torch.float32)
@@ -172,6 +177,14 @@ def run_live_loop(asset_universe: list[str],
                 continue
 
             # live logic
+            # throttle per bar open to reduce api query rate
+            current_time_posix = int(current_time.timestamp())
+            seconds_since_bar_open = current_time_posix % (5 * 60) # time since bar open in seconds
+            bar_open_time = current_time_posix - seconds_since_bar_open # bar open time
+            if latest_bar_time == bar_open_time: # check if same bar, true for all but new bar updated (-0) (strategy should only run logic on open of new bar)
+                time.sleep(1)
+                continue # already polled re-run 
+            latest_bar_time = bar_open_time
             # data
             oos_num_bars = max(is_optimal_corr_window, is_optimal_exp_window, lstm_lookback + 1)
             oos_data = coin.coinbase_data(products = asset_universe,
