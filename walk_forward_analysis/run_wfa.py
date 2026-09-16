@@ -21,19 +21,7 @@ import models.lstm_trading as lstm
 REGIME_CORRELATION_THRESHOLD = 0.8
 REGIME_FRACTION_NEGATIVE = 0.7
 
-
-def model_set_attributes(model: lstm, 
-                         params: dict):
-    """
-    set model attributes for class
-    """
-    [setattr(model, k, v) for (k, v) in params.items()]
-    pass
-
-
-# ---------------------------------------------
-# Regime gate (crash risk-off / de-invest signal), mirrors notebooks/backtest_dls.ipynb
-# ---------------------------------------------
+# --- REGIME GATE ---
 def rolling_corr(bench_returns: np.ndarray, 
                  asset_returns: np.ndarray, 
                  window: int) -> np.ndarray:
@@ -49,7 +37,7 @@ def rolling_corr(bench_returns: np.ndarray,
 def rolling_expected_pos_returns(asset_returns: np.ndarray, 
                                  window: int, 
                                  fraction_negative: float) -> np.ndarray:
-    """True where the rolling mean return of >= fraction_negative of assets is negative"""
+    """True when number of negative assets exceeds threshold (avoids all loosing togeterh case)"""
     rolling_mean = pd.DataFrame(asset_returns).rolling(window).mean().fillna(0.0).to_numpy()
     n_neg_required = int(np.ceil(fraction_negative * asset_returns.shape[1]))
     n_assets_negative = (rolling_mean < 0).sum(axis = 1)
@@ -116,7 +104,7 @@ def select_regime_windows(eval_port_returns: np.ndarray,
                 }
     return best
 
-
+# --- WFA PIPELINE ---
 def lstm_pipeline(dim,
                   train_loader,
                   eval_loader,
@@ -124,23 +112,20 @@ def lstm_pipeline(dim,
                   eval_returns: np.ndarray,
                   lookback: int,
                   bench_idx: int,
-                  target_vol: float = 0.1,
+                  target_vol: float | None = None, 
                   vol_scale_lkb: int | None = 24, # 2 hours volatility estimate
                   loss_sharpe = True,
                   cost: float = 0.0):
     """lstm train/eval/predict pipeline"""
+    # instentiate model 
     model_l = lstm.lstm(dim * 2,
                         dim,
                         hidden_dim = 128,
                         sharpe_loss = loss_sharpe,
                         volatility_lookback = vol_scale_lkb,
                         cost = cost)
-
-    params = {
-        'vol_trg': target_vol,
-    }
-    if vol_scale_lkb: # true for any non-zero number
-        model_set_attributes(model_l, params)
+    if vol_scale_lkb is not None:
+        model_l.vol_trg = target_vol
 
     # IS
     # train, evaluate
@@ -224,6 +209,10 @@ def backtest(config: dict[str]):
     tr_returns, eval_returns = data_prep.train_test_split_time_series(is_returns, tr_split)
     tr_prices, eval_prices = data_prep.train_test_split_time_series(is_prices, tr_split)
 
+    # set volatility target 
+    vol_proxy = tr_returns.std(dim = 0).numpy()
+    target_vol = np.percentile(vol_proxy, 90)
+    
     # data_pre_process() defaults
     train_set = {'returns': tr_returns, 'prices': tr_prices, 'lookback': lookback, 'mini_batches': batch}
     eval_set = {'returns': eval_returns, 'prices': eval_prices, 'lookback': lookback, 'mini_batches': batch}
@@ -243,6 +232,7 @@ def backtest(config: dict[str]):
                                eval_returns = eval_returns,
                                lookback = lookback,
                                bench_idx = bench_idx,
+                               target_vol = target_vol,
                                cost = cost)
 
     # apply the (already fixed, not re-tuned) in-sample-selected regime windows to oos predictions
@@ -274,7 +264,16 @@ def aggregate_results(wfa_results: list[dict]):
     
     return stacked
 
+# --- HELPERS ---
+def _model_set_attributes(model: lstm, 
+                         params: dict):
+    """
+    set model attributes for class
+    """
+    [setattr(model, k, v) for (k, v) in params.items()]
+    pass
 
+# --- RUN ---
 if __name__ == '__main__':
     # pull data
     data_dir = Path(__file__).resolve().parent.parent / 'data'
