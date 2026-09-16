@@ -237,12 +237,14 @@ def backtest(config: dict[str]):
 
     # apply the (already fixed, not re-tuned) in-sample-selected regime windows to oos predictions
     oos_port_rt = model_pipe['res']['returns']
+    oos_weights = model_pipe['res']['weights']
     oos_asset_rt = np.asarray(oos_returns)[lookback:][: len(oos_port_rt)]
     regime_mask = regime_gate(oos_asset_rt, bench_idx,
                               model_pipe['regime_windows']['window_corr'],
                               model_pipe['regime_windows']['window_exp'])
     model_pipe['res']['regime_mask'] = regime_mask # truth array, True when confluence of regimes, False otherwise
-    model_pipe['res']['gated_returns'] = np.where(regime_mask, 0.0, oos_port_rt)
+    model_pipe['res']['gated_returns'] = np.where(regime_mask, 0.0, oos_port_rt) # returns 0, liquidate portfolio
+    model_pipe['res']['gated_weights'] = np.where(regime_mask[:, None], 0.0, oos_weights) # ensure (T, ) broadcasts per observation of weights of shape (T, n_assets)
 
     return model_pipe
 
