@@ -151,7 +151,7 @@ def run_live_loop(asset_universe: list[str],
                              hidden_dim = lstm_hidden_dim,
                              volatility_lookback = lstm_vol_scale_lookback,
                              cost = lstm_pct_volume_fees)
-                model.vol_trg = target_vol
+                model.vol_trg = target_vol # set target volatility
                 # model training
                 model.lstm_train(train_loader = loaders['train_loader'],
                                  eval_loader = loaders['eval_loader'],
@@ -229,18 +229,23 @@ def run_live_loop(asset_universe: list[str],
                 continue
 
             # signal to exchange
-            if regime_flag:
+            if not regime_flag:
                 asset_weight_dict = coin.tickers_weight(asset_universe, w_pred_adj) # each asset new portfolio weight
                 order_payload = coin.multi_asset_invest(portfolio_ticker_weights = asset_weight_dict) # signal to exchange
                 # log to loggers 
                 live_trading.info('successfully rebalanced portfolio')
-                live_logging.trades_logger('trades', 'portfolio rebalance', model_port_weights = w_pred_adj, turnover = order_payload['weight_diffs'], account_balance = order_payload['account_balance'])
+                live_logging.trades_logger('trades', 'portfolio_rebalance', model_port_weights = w_pred_adj, turnover = order_payload['weight_diffs'], account_balance = order_payload['account_balance'])
                 # reset flaged trade on 
                 logged_regime_flag = False 
             else: 
+                # liquidate portfolio 
+                coin.multi_asset_close(asset_universe, full_close = True)
+                # logg full close 
+                live_trading.info('successfully liquidated portfolio position')
+                live_logging.trades_logger('tardes', 'portfolio_liquidation', turnover = sum(w_prev_adj))
                 # only write flaged trades on switch 
                 if not logged_regime_flag:
-                    live_trading.info('regime state false, skipping portfolio rebalance')
+                    live_trading.info('regime state True, liquidated portfolio to cash')
                     logged_regime_flag = True
 
             # log all weights (flagged/unflagged) to database dataframes 
