@@ -47,7 +47,7 @@ class lstm_model(nn.Module):
         Output: dim(x) = (batch_size, sequence_length, output_size = n_assets)
         """
         # (batch, sequence, hidden) -> (batch, sequence, n_assets)
-        _, (hn, cn) = self.lstm(x)
+        _, (hn, _) = self.lstm(x)
         # to weights
         output = self.linear(hn[-1]) # last layer's final hidden state, (batch, n_assets)
         final_output = self.output(output) # bound weights
@@ -217,15 +217,17 @@ class lstm():
         } 
     
     # helpers 
-    def __portfolio_returns(self, 
-                            port_weight, 
+    def __portfolio_returns(self,
+                            port_weight,
                             port_returns):
-        """portfolio return, assume log returns"""
+        """portfolio return, assume log returns; uninvested weight (1 - sum(w)) sits in cash and earns no return"""
         first_prev = self._prev_w if self._prev_w is not None else torch.zeros_like(port_weight[:1])
         prev_w_p = torch.cat((first_prev, port_weight[:-1]))
         self._prev_w = port_weight[-1:].detach()
         turnover = torch.sum(torch.abs(port_weight - prev_w_p), dim = 1)
-        return torch.log(torch.sum(port_weight * torch.exp(port_returns), dim = -1)) + torch.log(1 - self.cost * turnover) # percentage of equity survived
+        invested = torch.sum(port_weight * torch.exp(port_returns), dim = -1)
+        cash = 1 - torch.sum(port_weight, dim = -1)
+        return torch.log(invested + cash) + torch.log(1 - self.cost * turnover) # percentage of equity survived
 
     def __forward_pass(self, 
                        x, 
@@ -238,9 +240,9 @@ class lstm():
         y = y.to(self.device)
         # rt and inv feature 1 batch 
         rt = rt.to(self.device)
-        x1_inv = x1_inv.to(self.device)
+        x1_inv = x1_inv.to(self.device) # inverse standerdised first feature vector 
         # forward pass - optimal model used if trained
-        w_p = self.model(x, self.w_min)
+        w_p = self.model(x, self.w_min) # prediction
         vol_scaler = None
         if self.vol_scale_lkb is not None: 
             vol_scaler = vol_scale(x1_inv, self.vol_trg, self.vol_scale_lkb)[:, -1, :] # (batch, lookback, features) -> last(batch, features)
@@ -278,7 +280,7 @@ def vol_scale(a: torch.Tensor,
         else:
             subset = a[:, t - vol_lookback: t, :] # (batch, lookback_t, n_assets)
             exenate_vol = torch.std(subset, dim = 1).clamp_min(eps) # (batch, n_assets), set min val to avoid div by zero error
-            vol_t = torch.clamp(target_vol / exenate_vol, max = 1.0) # de-risk only: never scale a position above its Sparsemax weight
+            vol_t = torch.clamp(target_vol / exenate_vol, max = 1.0) # de-risk only: never scale a position above its Sparsemax weight - as a result will hodl cash 
             current_scale = alpha * vol_t + (1 - alpha) * prev_scale # ema
         vol_scalers.append(current_scale)
         prev_scale = current_scale
