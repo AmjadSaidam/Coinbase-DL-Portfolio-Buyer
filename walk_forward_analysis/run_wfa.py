@@ -41,7 +41,7 @@ def rolling_expected_pos_returns(asset_returns: np.ndarray,
     rolling_mean = pd.DataFrame(asset_returns).rolling(window).mean().fillna(0.0).to_numpy()
     n_neg_required = int(np.ceil(fraction_negative * asset_returns.shape[1]))
     n_assets_negative = (rolling_mean < 0).sum(axis = 1)
-    return n_assets_negative >= n_neg_required
+    return n_assets_negative < n_neg_required
 
 
 def rolling_sharpe(returns: np.ndarray, 
