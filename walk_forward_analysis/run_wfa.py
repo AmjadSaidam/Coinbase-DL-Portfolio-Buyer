@@ -22,7 +22,7 @@ REGIME_CORRELATION_THRESHOLD = 0.8
 REGIME_FRACTION_NEGATIVE = 0.7
 
 # --- REGIME GATE ---
-def rolling_corr(bench_returns: np.ndarray, 
+def rolling_corr_flag(bench_returns: np.ndarray, 
                  asset_returns: np.ndarray, 
                  window: int) -> np.ndarray:
     """rolling correlation between a benchmark and an asset return series"""
@@ -34,14 +34,14 @@ def rolling_corr(bench_returns: np.ndarray,
     return np.nan_to_num(corr, nan = 0.0)
 
 
-def rolling_expected_pos_returns(asset_returns: np.ndarray, 
+def rolling_expected_return_flag(asset_returns: np.ndarray, 
                                  window: int, 
                                  fraction_negative: float) -> np.ndarray:
     """True when number of negative assets exceeds threshold (avoids all loosing togeterh case)"""
     rolling_mean = pd.DataFrame(asset_returns).rolling(window).mean().fillna(0.0).to_numpy()
     n_neg_required = int(np.ceil(fraction_negative * asset_returns.shape[1]))
     n_assets_negative = (rolling_mean < 0).sum(axis = 1)
-    return n_assets_negative < n_neg_required
+    return n_assets_negative >= n_neg_required
 
 
 def rolling_sharpe(returns: np.ndarray, 
@@ -66,12 +66,12 @@ def regime_gate(asset_returns: np.ndarray,
     non_bench_idx = [i for i in range(n_assets) if i != bench_idx]
 
     corr_flags = np.stack([
-        rolling_corr(bench_returns, asset_returns[:, i], window_corr) > correlation_threshold
+        rolling_corr_flag(bench_returns, asset_returns[:, i], window_corr) > correlation_threshold
         for i in non_bench_idx
     ], axis = 1)
     crash = corr_flags.sum(axis = 1) == (n_assets - 1) # all pair-wise correlations to base exceed threshold
 
-    breadth = rolling_expected_pos_returns(asset_returns, window_exp, fraction_negative)
+    breadth = rolling_expected_return_flag(asset_returns, window_exp, fraction_negative)
     return crash & breadth
 
 
