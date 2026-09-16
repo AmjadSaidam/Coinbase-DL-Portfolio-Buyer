@@ -8,7 +8,6 @@ import logging
 from dotenv import load_dotenv; load_dotenv()
 from datetime import datetime
 import numpy as np
-import pandas as pd
 import time
 import json
 import torch
@@ -20,7 +19,7 @@ from live_trading.coinbase_order_functions import CoinbaseTrader
 import live_trading.live_errors as coin_error
 import live_trading.live_logging as live_logging
 from telegram_bot import shut_down_state_file_name, load_json
-from data_loaders import data_to_sql
+from data_loaders import data_to_sql, utils
 
 # --- PATHS ---
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -36,8 +35,11 @@ def run_live_loop(asset_universe: list[str],
     api_key                  = os.environ.get('LIVE_API_KEY')
     api_secret               = os.environ.get('LIVE_API_SECRET')
     # wfa env vars
-    is_fold_len              = int(os.environ.get('LIVE_WFA_IS_BARS'))
-    oos_fold_len             = int(is_fold_len // 2) # OOS is half len of IS
+    timeframe                = os.environ.get('LIVE_TIMEFRAME') 
+    time_incrument           = int(utils.granularity_seconds[timeframe] / 60) # time frame increment in minutes
+    is_fold_days             = int(os.environ.get('LIVE_WFA_IS_DAYS')) # IS len in days 
+    oos_time_days            = int(is_fold_days // 2) # OOS len in days
+    is_fold_bars             = int(60 / time_incrument * 24 * is_fold_days) # IS len in timeframe bars 
     # lstm env vars
     lstm_hidden_dim          = int(os.environ.get('LIVE_LSTM_HIDDEN_DIM'))
     lstm_lookback            = int(os.environ.get('LIVE_LSTM_LOOKBACK'))
@@ -106,7 +108,7 @@ def run_live_loop(asset_universe: list[str],
             live_trading.error(f"failed to connect to coinbase-advanced with error {e}: re-trying in 1s")
             _attempt_reconnect(coin)
     # log INFO type to live_trades.log
-    live_trading.info(f"successfully connected to coinbase-advanced, API link open and read for GET/POST")
+    live_trading.info(f"successfully connected to coinbase-advanced, API link established and ready for GET/POST querying")
 
     # log defaults 
     logged_regime_flag = False 
@@ -119,10 +121,12 @@ def run_live_loop(asset_universe: list[str],
             # time vars
             current_time = datetime.now()
             # wfa
-            run_wfa = time_last_wfa is None or (current_time - time_last_wfa).days >= 1
+            run_wfa = time_last_wfa is None or (current_time - time_last_wfa).days >= oos_time_days
             if run_wfa:
                 # data (only include closed historical bars)
-                data = coin.coinbase_data(asset_universe, num_bars = is_fold_len)
+                data = coin.coinbase_data(asset_universe, 
+                                          num_bars = is_fold_bars, 
+                                          granularity = timeframe)
                 df_pr = data['prices'].iloc[: -1, :]
                 df_rt = data['returns'].iloc[: -1, :]
                 # features
@@ -179,7 +183,7 @@ def run_live_loop(asset_universe: list[str],
             # live logic
             # throttle per bar open to reduce api query rate
             current_time_posix = int(current_time.timestamp())
-            seconds_since_bar_open = current_time_posix % (5 * 60) # time since bar open in seconds
+            seconds_since_bar_open = current_time_posix % (time_incrument * 60) # time since bar open in seconds
             bar_open_time = current_time_posix - seconds_since_bar_open # bar open time
             if latest_bar_time == bar_open_time: # check if same bar, true for all but new bar updated (-0) (strategy should only run logic on open of new bar)
                 time.sleep(1)
@@ -188,7 +192,8 @@ def run_live_loop(asset_universe: list[str],
             # data
             oos_num_bars = max(is_optimal_corr_window, is_optimal_exp_window, lstm_lookback + 1)
             oos_data = coin.coinbase_data(products = asset_universe,
-                                          num_bars = oos_num_bars)
+                                          num_bars = oos_num_bars, 
+                                          granularity = timeframe)
             oos_closed_pr_data = oos_data['prices'].iloc[: -1, :]
             oos_closed_rt_data = oos_data['returns'].iloc[: -1, :]
             # data length minimum bound equal to lookback
@@ -220,7 +225,6 @@ def run_live_loop(asset_universe: list[str],
             w_prev_adj = coin.get_real_weights(asset_universe)
             turnover = w_pred_adj - np.array(w_prev_adj)
             if np.sum(np.abs(turnover)) < port_min_turnover:
-                # log INFO to trades_live.log
                 time.sleep(1)
                 continue
 
