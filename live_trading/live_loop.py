@@ -92,9 +92,9 @@ def run_live_loop(asset_universe: list[str],
         })
 
     # instentiate database files
-    database = 'live_trades'
+    database = 'live_trading_database' # will create in root folder
     pred_db = _sql_database(database_name = database, name_data = 'predicted_weights', asset_universe = asset_universe)
-    obv_db = _sql_database(database_name = database, name_data = 'observed_weights', asset_universe = asset_universe) # actual invested amount
+    act_db = _sql_database(database_name = database, name_data = 'actual_weights', asset_universe = asset_universe) # actual invested amount
 
     # call coinbase account manager
     coin = CoinbaseTrader(api_key, api_secret) # reads api key from .env
@@ -245,7 +245,7 @@ def run_live_loop(asset_universe: list[str],
 
             # log all weights (flagged/unflagged) to database dataframes 
             pred_db.list_to_data(weights = w_pred_adj)
-            obv_db.list_to_data(weights = w_prev_adj)
+            act_db.list_to_data(weights = w_prev_adj)
 
         # error/logging
         # error strings written from /coinbase_order_functions

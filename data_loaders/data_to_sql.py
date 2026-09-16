@@ -2,7 +2,7 @@
 """
 import sqlite3 as sq 
 import pandas as pd
-import datetime as dt
+from datetime import datetime
 
 # specifically for saving dmlstm array output
 class CreateSQLiteDatabase():
@@ -12,8 +12,8 @@ class CreateSQLiteDatabase():
                  name_data: str):
         # define initial class attributes
         self.tickers = tickers 
-        self.name_db = name_database
-        self.name = name_data
+        self.name_db = name_database + '.db'
+        self.name = name_data 
 
     def create_access_database_file(self):
         self.con = sq.connect(self.name_db) # will create database in this folder / or access it if already exists
@@ -27,7 +27,7 @@ class CreateSQLiteDatabase():
     def list_to_data(self, weights: list):
         """"""
         data_pre_process = dict(zip(self.tickers, weights))
-        self.weights = pd.DataFrame(data = data_pre_process, index = [dt.datetime.today().isoformat()])
+        self.weights = pd.DataFrame(data = data_pre_process, index = [pd.Timestamp(datetime.now(), unit = 's', tz = 'UTC')])
         
         # update database
         self.weights.to_sql(name = self.name, con = self.con, if_exists = 'append', index = True)
