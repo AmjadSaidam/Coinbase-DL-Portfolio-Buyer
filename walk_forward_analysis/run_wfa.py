@@ -1,5 +1,5 @@
-"""
-to run on vast-ai run: 
+r"""
+to run on vast-ai run:
 git clone https://github.com/AmjadSaidam/Coinbase-DL-Portfolio-Buyer.git \Coinbase-DL-Portfolio-Buyer
 uv sync
 uv run -m walk_forward_analysis.run_wfa
@@ -168,9 +168,12 @@ def walk_forward_analysis(return_data,
         # wfa in-sample features 
         is_returns = return_data[cutoff - split_len: cutoff, :]
         is_prices = price_data[cutoff - split_len: cutoff, :] 
-        # wfa out-of-sample features
-        oos_returns = return_data[cutoff: cutoff + oos_len, :]
-        oos_prices = price_data[cutoff: cutoff + oos_len, :]
+        # wfa out-of-sample features - prepend the last `lookback` in-sample bars (strictly before
+        # cutoff, so no lookahead): prepare_features() consumes the first `lookback` rows as feature
+        # context only, so this makes the first oos prediction land on `cutoff` itself and
+        # consecutive folds tile calendar time with no gap
+        oos_returns = return_data[cutoff - lookback: cutoff + oos_len, :]
+        oos_prices = price_data[cutoff - lookback: cutoff + oos_len, :]
 
         # backtest
         backtest_configs.append(
@@ -239,12 +242,23 @@ def backtest(config: dict[str]):
     oos_port_rt = model_pipe['res']['returns']
     oos_weights = model_pipe['res']['weights']
     oos_asset_rt = np.asarray(oos_returns)[lookback:][: len(oos_port_rt)]
-    regime_mask = regime_gate(oos_asset_rt, bench_idx,
+    # gate over the full slice so the rolling windows (<= 200 < lookback) warm up on the prepended
+    # in-sample bars, instead of silently returning "no crash" for the first `window` bars of every fold
+    regime_mask = regime_gate(np.asarray(oos_returns), bench_idx,
                               model_pipe['regime_windows']['window_corr'],
-                              model_pipe['regime_windows']['window_exp'])
+                              model_pipe['regime_windows']['window_exp'])[lookback:][: len(oos_port_rt)]
     model_pipe['res']['regime_mask'] = regime_mask # truth array, True when confluence of regimes, False otherwise
+    # the exact per-bar asset returns/prices each prediction was scored against - persisted so the
+    # notebook's equity accounting reads aligned ground truth instead of re-slicing data/ (which may
+    # have been re-fetched since this run)
+    model_pipe['res']['asset_returns'] = oos_asset_rt
+    model_pipe['res']['asset_prices'] = np.asarray(oos_prices)[lookback:][: len(oos_port_rt)]
     model_pipe['res']['gated_returns'] = np.where(regime_mask, 0.0, oos_port_rt) # returns 0, liquidate portfolio
-    model_pipe['res']['gated_weights'] = np.where(regime_mask[:, None], 0.0, oos_weights) # ensure (T, ) broadcasts per observation of weights of shape (T, n_assets)
+    # ensure (T,) broadcasts per observation of weights of shape (T, n_assets) - the resulting 0 -> w and
+    # w -> 0 swings at each regime transition are exactly the liquidation/re-entry trades, so the notebook's
+    # existing turnover * fee sweep prices them consistently at whatever tier it's testing, with no fixed
+    # cost hardcoded here
+    model_pipe['res']['gated_weights'] = np.where(regime_mask[:, None], 0.0, oos_weights)
 
     return model_pipe
 
