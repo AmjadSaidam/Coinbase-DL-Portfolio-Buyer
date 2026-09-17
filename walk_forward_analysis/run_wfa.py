@@ -129,7 +129,7 @@ def lstm_pipeline(dim,
 
     # IS
     # train, evaluate
-    epochs = 100
+    epochs = 20
     model_l.lstm_train(train_loader, eval_loader, n_epochs = epochs)
 
     # regime windows selected from the best-epoch in-sample eval predictions only (never oos) -
