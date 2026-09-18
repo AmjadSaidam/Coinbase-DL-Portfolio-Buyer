@@ -61,7 +61,7 @@ class CoinbaseTrader:
         gets BASE currency investment for pair BASE:QUOTE 
         """
         asset = self.get_base(asset)
-        return account_values[asset] # asset associted holding, e.g. BTC-USD -> BTC: x  
+        return account_values.get(asset, 0) # asset associted holding, e.g. BTC-USD -> BTC: x, 0 if no wallet exists yet (first-time holding)
 
     def coinbase_data(self,
                       products: list[str],
@@ -265,10 +265,10 @@ class CoinbaseTrader:
                               total_portfolio_value, 
                               full_close = False) -> list[str, float]:
         """
-        gets order type and order value in BASE:QUOTE 
-        
+        gets order type and order value in BASE:QUOTE
+
         If investing first time, when looping through this function, base_value will raise a keyError as to_base_value() will not be able to find key in accounts.
-        To avoid this we use .get(), if the key is not found we return 0 and base_size is 0 which is valid. 
+        To avoid this we use .get(), if the key is not found we return 0 and base_size is 0 which is valid.
         """
         accounts = self.get_user_accounts()
 
@@ -286,14 +286,14 @@ class CoinbaseTrader:
             #              | BUY using QUOTE (not supported for spot) , if closing out SELL
             # e.g. bought BTC-GBP using GBP, to close trade must close in BTC (because our position is enumerated in BTC)
             order_value_standard = {
-                'base_size': str(base_size_sell) 
+                'base_size': str(base_size_sell)
                 } if (order_type == 'SELL') else {
                     'quote_size': str(quote_size_buy)
-                    } 
-            
-        # full close amount
-        asset_value = self.asset_base(asset, account_values = accounts) # for BUY, get quantity invested in asset class in BASE currency (float type)
+                    }
+
+        # full close amount, only needed (and only looked up) when actually closing out a position
         if full_close:
+            asset_value = self.asset_base(asset, account_values = accounts) # for BUY, get quantity invested in asset class in BASE currency (float type)
             asset_value = self.order_value_to_increment(asset, asset_value, increment_type = 'base_increment') # round down to a valid base increment
         order_value = {'base_size': str(asset_value)} if full_close else order_value_standard
         order_side = 'SELL' if full_close else order_type 
@@ -344,7 +344,7 @@ class CoinbaseTrader:
         return self.create_asset_order(asset, account_balance = total_pf_value, weight = weight_diff, full_close = full_close, **kwargs)
     
     def multi_asset_close(self, 
-                          portfolio_tickers: dict, 
+                          portfolio_tickers: list, 
                           full_close: bool):
         """
         exist all open trades, returing investemnts to base account
