@@ -8,8 +8,10 @@ import logging
 from dotenv import load_dotenv; load_dotenv()
 from datetime import datetime
 import numpy as np
+import pandas as pd
 import time
 import json
+import pickle
 import torch
 # .py
 from models.lstm_trading import lstm, vol_scale
@@ -25,6 +27,7 @@ from data_loaders import data_to_sql, utils
 ROOT = os.path.dirname(os.path.abspath(__file__))
 LOGS = os.path.join(ROOT, 'logs')
 LOGS_LIVE = os.path.join(LOGS, 'live_state.json')
+LOGS_DATA = os.path.join(LOGS, 'data_cache')
 LOGS_MODEL = os.path.join(LOGS, 'live_model.pt')
 
 # --- LIVE LOOP ---
@@ -50,6 +53,12 @@ def run_live_loop(asset_universe: list[str],
     lstm_epochs              = int(os.environ.get('LIVE_LSTM_EPOCHS'))
     # portfolio env vars
     port_min_turnover        = float(os.environ.get('LIVE_PORTFOLIO_MIN_TUROVER'))
+    # post-hoc regime env vars
+    bench_window_days        = int(os.environ.get('LIVE_BENCHMARK_WINDOW_DAYS')) # benchmark sma len in days
+    bench_sma_bars           = int(60 / time_incrument * 24 * bench_window_days) # benchmark sma len in timeframe bars, mirrors notebooks/backtest_dls.ipynb sma_window
+
+    # data cache
+    data_cache = None
 
     # other model vars
     dim = len(asset_universe)
@@ -79,17 +88,26 @@ def run_live_loop(asset_universe: list[str],
         is_target_volatility = saved_state.get('is_target_volatility', None)
         if os.path.exists(LOGS_MODEL): # read optimal model weights
             is_optimal_model.model.load_state_dict(torch.load(LOGS_MODEL, map_location = 'cpu'))
+        # data cache (pickled, not JSON - a DataFrame with a DatetimeIndex doesn't round-trip through json)
+        if os.path.exists(LOGS_DATA):
+            with open(LOGS_DATA, mode = 'rb') as f:
+                data_cache = pickle.load(f)
 
     # write changes
     def _write_state():
         os.makedirs(os.path.dirname(LOGS_LIVE), exist_ok = True)
+        # save model
         torch.save(is_optimal_model.model.to('cpu').state_dict(), LOGS_MODEL) # model weights are not JSON serialisable, saved separately
+        # save state dicts
         _save_state({
             'time_last_wfa': time_last_wfa.isoformat() if (time_last_wfa is not None) else None,
             'is_optimal_corr_window': is_optimal_corr_window,
             'is_optimal_exp_window': is_optimal_exp_window,
             'is_target_volatility': is_target_volatility
         })
+        # save data cache
+        with open(LOGS_DATA, mode = 'wb') as f:
+            pickle.dump(data_cache, f)
 
     # instentiate database files
     database = 'live_trading_database' # will create in root folder
@@ -121,17 +139,24 @@ def run_live_loop(asset_universe: list[str],
             # time vars
             current_time = datetime.now()
             # wfa
-            run_wfa = time_last_wfa is None or (current_time - time_last_wfa).days >= oos_time_days
+            fold_params_missing = None in (is_optimal_corr_window, is_optimal_exp_window, is_target_volatility) # e.g. a state file from before these were persisted
+            run_wfa = time_last_wfa is None or fold_params_missing or (current_time - time_last_wfa).days >= oos_time_days
             if run_wfa:
-                # data (only include closed historical bars)
-                data = coin.coinbase_data(asset_universe, 
-                                          num_bars = is_fold_bars, 
-                                          granularity = timeframe)
-                df_pr = data['prices'].iloc[: -1, :]
-                df_rt = data['returns'].iloc[: -1, :]
-                # features
-                x_price = torch.tensor(df_pr.to_numpy(), dtype = torch.float32)
-                x_return = torch.tensor(df_rt.to_numpy(), dtype = torch.float32)
+                # inintial full IS API request on start up, otherwise read from data dict which is persisted per bar
+                if data_cache is None:
+                    data = coin.coinbase_data(asset_universe,
+                                              num_bars = is_fold_bars + 1,
+                                              granularity = timeframe)
+                    # closed data
+                    df_pr, df_rt = _closed_bars(data, is_fold_bars)
+                    data_cache = {
+                        'prices': df_pr,
+                        'returns': df_rt
+                    }
+                # features - data_cache is rolled forward one bar at a time by the live-logic
+                # block below, so after the initial load here no separate fetch is needed
+                x_price = torch.tensor(data_cache['prices'].to_numpy(), dtype = torch.float32)
+                x_return = torch.tensor(data_cache['returns'].to_numpy(), dtype = torch.float32)
                 # wfa in-sample fold
                 is_train_pr, is_eval_pr = data_prep.train_test_split_time_series(x_price, lstm_train_frac)
                 is_train_rt, is_eval_rt = data_prep.train_test_split_time_series(x_return, lstm_train_frac)
@@ -163,14 +188,16 @@ def run_live_loop(asset_universe: list[str],
                 eval_asset_rt = np.asarray(is_eval_rt)[lstm_lookback: ][: len(eval_port_rt)]
                 best_windows = select_regime_windows(eval_port_returns = eval_port_rt,
                                                      eval_asset_returns = eval_asset_rt,
-                                                     bench_idx = df_pr.columns.get_loc(benchmark))
+                                                     bench_idx = data_cache['prices'].columns.get_loc(benchmark))
                 is_optimal_corr_window = best_windows['window_corr']
                 is_optimal_exp_window = best_windows['window_exp']
                 # write changes
                 time_last_wfa = current_time
                 _write_state()
                 # logs
-                live_trading.info('successfully trained model on most recent in-sample fold: {}-{}'.format(coin.start_date, coin.end_date))
+                live_trading.info('successfully trained model on most recent in-sample fold: {}-{}'.format(data_cache['prices'].index[0], data_cache['prices'].index[-1]))
+                # skip live iteration this bar
+                continue 
 
             # check shut down state
             strategy_off = load_json(file = shut_down_state_file_name)['status']
@@ -190,21 +217,28 @@ def run_live_loop(asset_universe: list[str],
                 continue # already polled re-run 
             latest_bar_time = bar_open_time
             # data
-            oos_num_bars = max(is_optimal_corr_window, is_optimal_exp_window, lstm_lookback + 1)
             oos_data = coin.coinbase_data(products = asset_universe,
-                                          num_bars = oos_num_bars, 
+                                          num_bars = 2,
                                           granularity = timeframe)
-            oos_closed_pr_data = oos_data['prices'].iloc[: -1, :]
-            oos_closed_rt_data = oos_data['returns'].iloc[: -1, :]
-            # data length minimum bound equal to lookback
-            closed_pr_data = oos_closed_pr_data.iloc[-lstm_lookback: , :]
-            closed_rt_data = oos_closed_rt_data.iloc[-lstm_lookback: , :]
-
+            # closed data
+            df_pr, df_rt = _closed_bars(oos_data, 1)
+            # cache data - skip if the fetched bar is already the cache's last bar (eg just ran WFA)
+            if data_cache and (df_pr.index[-1] > data_cache['prices'].index[-1]): # cached index must be greater than loaded index to append new bar data
+                n_new = len(df_pr)
+                data_cache['prices'] = pd.concat([data_cache['prices'].iloc[n_new: ], df_pr])
+                data_cache['returns'] = pd.concat([data_cache['returns'].iloc[n_new: ], df_rt])
+            # save updates
+            _write_state()
+            # lstm feature window - the last `lookback` closed bars, prepare_features() subset [t - lookback, t)
+            oos_closed_pr_data = data_cache['prices']
+            oos_closed_rt_data = data_cache['returns']
+            oos_pr_feature_data = oos_closed_pr_data.iloc[-lstm_lookback: , :]
+            oos_rt_feature_data = oos_closed_rt_data.iloc[-lstm_lookback: , :]
             # oos prediction (inference runs on cpu - single-sample cost is negligible,
             # and this keeps the model's device in sync with the plain cpu feature tensors below)
             is_optimal_model.model.to('cpu').eval()
-            closed_pr_t = torch.tensor(closed_pr_data.to_numpy(), dtype = torch.float32)
-            closed_rt_t = torch.tensor(closed_rt_data.to_numpy(), dtype = torch.float32)
+            closed_pr_t = torch.tensor(oos_pr_feature_data.to_numpy(), dtype = torch.float32)
+            closed_rt_t = torch.tensor(oos_rt_feature_data.to_numpy(), dtype = torch.float32)
             oos_features = torch.concat([
                 data_prep.tensor_standardise(closed_pr_t),
                 data_prep.tensor_standardise(closed_rt_t)
@@ -216,20 +250,31 @@ def run_live_loop(asset_universe: list[str],
             w_pred_adj = (w_pred * vol_scaler).flatten()
 
             # regimes
-            regime_flag = regime_gate(asset_returns = oos_closed_rt_data.to_numpy(),
-                                      bench_idx = oos_closed_rt_data.columns.get_loc(benchmark),
-                                      window_corr = is_optimal_corr_window,
-                                      window_exp = is_optimal_exp_window)[-1]
+            # 1) fold crash gate - in-sample grid-searched windows, evaluated on the last closed bar
+            bench_idx = df_pr.columns.get_loc(benchmark)
+            regime_flag = bool(regime_gate(asset_returns = oos_closed_rt_data.to_numpy(),
+                                           bench_idx = bench_idx,
+                                           window_corr = is_optimal_corr_window,
+                                           window_exp = is_optimal_exp_window)[-1])
+            # 2) benchmark trend gate - last close below its rolling sma (notebook backtest() sma_window);
+            #    an sma that has not warmed up (nan) never gates, as in the notebook
+            bench_px = oos_closed_pr_data.iloc[:, bench_idx]
+            bench_sma = bench_px.rolling(window = bench_sma_bars).mean().iloc[-1]
+            sma_flag = bool(bench_px.iloc[-1] < bench_sma) if not np.isnan(bench_sma) else False
+            full_mask = regime_flag or sma_flag
+            # dont trade case - the target is the all-cash portfolio
+            target_w = np.zeros(dim) if full_mask else w_pred_adj
 
-            # turnover flag
-            w_prev_adj = coin.get_real_weights(asset_universe)
-            turnover = w_pred_adj - np.array(w_prev_adj)
-            if np.sum(np.abs(turnover)) < port_min_turnover:
+            # turnover deadband vs the actual (drifted) held position, mirrors notebook backtest():
+            # skip small rebalances, but a regime-forced liquidation must always execute
+            w_prev_adj = np.array(coin.get_real_weights(asset_universe))
+            turnover = np.sum(np.abs(target_w - w_prev_adj))
+            if not ((turnover >= port_min_turnover) or (full_mask and turnover > 0)):
                 time.sleep(1)
                 continue
 
             # signal to exchange
-            if not regime_flag:
+            if not full_mask:
                 asset_weight_dict = coin.tickers_weight(asset_universe, w_pred_adj) # each asset new portfolio weight
                 order_payload = coin.multi_asset_invest(portfolio_ticker_weights = asset_weight_dict) # signal to exchange
                 # log to loggers 
@@ -242,10 +287,10 @@ def run_live_loop(asset_universe: list[str],
                 coin.multi_asset_close(asset_universe, full_close = True)
                 # logg full close 
                 live_trading.info('successfully liquidated portfolio position')
-                live_logging.trades_logger('tardes', 'portfolio_liquidation', turnover = sum(w_prev_adj))
+                live_logging.trades_logger('trades', 'portfolio_liquidation', turnover = turnover, regime_flag = regime_flag, sma_flag = sma_flag)
                 # only write flaged trades on switch 
                 if not logged_regime_flag:
-                    live_trading.info('regime state True, liquidated portfolio to cash')
+                    live_trading.info(f'regime state True (crash gate: {regime_flag}, benchmark below sma: {sma_flag}), liquidated portfolio to cash')
                     logged_regime_flag = True
 
             # log all weights (flagged/unflagged) to database dataframes 
@@ -291,6 +336,15 @@ def _attempt_reconnect(coin: CoinbaseTrader):
     if not coin.authenticated:
         time.sleep(5)
         coin.login()
+
+def _closed_bars(data: dict,
+                 n_bars: int):
+    """filters for closed bars only"""
+    prices = data['prices'].iloc[1: -1, :]
+    returns = data['returns'].iloc[1: -1, :]
+    if len(returns) != n_bars: # universe alignment (leading nans) or a short api reply shaved rows - fail loud, never gate on fewer bars
+        raise coin_error.CoinDataError(f'expected {n_bars} closed bars, received {len(returns)}')
+    return prices, returns
 
 def _sql_database(database_name: str,
                   name_data: str,
