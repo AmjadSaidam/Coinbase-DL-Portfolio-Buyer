@@ -18,7 +18,7 @@ from models import data_preprocessing as data_prep
 import models.lstm_trading as lstm
 
 # regime gate constants - fixed (not grid-searched), mirroring notebooks/backtest_dls.ipynb defaults
-REGIME_CORRELATION_THRESHOLD = 0.8
+REGIME_CORRELATION_THRESHOLD = 0.7
 REGIME_FRACTION_NEGATIVE = 0.7
 
 # --- REGIME GATE ---
@@ -311,6 +311,15 @@ if __name__ == '__main__':
 
     # outputs 
     aggregated = aggregate_results(wfa_results)
+    # asset order and the calendar index of every oos prediction - the notebook must read these from
+    # the pickle rather than rebuild them from data/: iterdir() column order differs between machines,
+    # and the folds stop short of the dataset end so a tail-slice lands on the wrong bars
+    aggregated['symbols'] = list(df_prices.columns)
+    aggregated['bench_idx'] = bench_idx
+    aggregated['oos_timestamps'] = [
+        df_prices.index[cfg['cutoff']: cfg['cutoff'] + len(r['res']['returns'])]
+        for cfg, r in zip(configs, wfa_results)
+    ]
     
     # save to disk
     with open(Path(__file__).resolve().parent / 'wfa.pkl', mode = 'wb') as f:
