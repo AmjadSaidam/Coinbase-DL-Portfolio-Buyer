@@ -6,8 +6,7 @@ __pycache__/
 logs/
 
 # files (root level)
-predicted_weights.db/
-observed_weights.db/
+live_trading_database.db/
 
 # Environments
 .env
