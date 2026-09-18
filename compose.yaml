@@ -3,9 +3,9 @@
 # help:
 # https://docs.docker.com/go/compose-spec-reference/
 
-# command line run prompt (either), run only for DockerFile/.yaml changes: 
-# >>> docker compose up --build
-# >>> docker compose up --build service1 service2
+# command line run prompt (either), run only for DockerFile/.yaml changes, -d ensures runs in backround not current terminal: 
+# >>> docker compose up --build -d
+# >>> docker compose up --build -d service1 service2
 
 # for code changes (last for both):
 # >>> docker compose up -d service1
@@ -25,6 +25,7 @@ services:
         GID: ${HOST_GID:-20}
     command: ['python', 'telegram_bot.py']
     container_name: telegram_bot
+    restart: unless-stopped
     env_file:
       - .env
     ports:
@@ -41,6 +42,7 @@ services:
           GID: ${HOST_GID:-20}
       command: ['python', '-m', 'live_trading.live_loop']
       container_name: strategy
+      restart: unless-stopped
       env_file:
         - .env
       ports:
