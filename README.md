@@ -1,10 +1,6 @@
 # Deep-Learning Cryptocurrency Trading Bot: DLS-LSTM
 
-![Static Badge](https://img.shields.io/badge/3.11%2B-Python-blue?logo=python)
-
-![Static Badge](https://img.shields.io/badge/2.7.1-torch-orange?logo=pytorch&link=https%3A%2F%2Fpytorch.org%2F)
-
-![Static Badge](https://img.shields.io/badge/1.8.2-coinbase--advanced-blue?logo=coinbase&link=https%3A%2F%2Fdocs.cdp.coinbase.com%2Fapi-reference%2Fadvanced-trade-api%2Frest-api%2Fintroduction)
+![Static Badge](https://img.shields.io/badge/3.11%2B-Python-blue?logo=python) ![Static Badge](https://img.shields.io/badge/2.7.1-torch-orange?logo=pytorch&link=https%3A%2F%2Fpytorch.org%2F) ![Static Badge](https://img.shields.io/badge/1.8.2-coinbase--advanced-blue?logo=coinbase&link=https%3A%2F%2Fdocs.cdp.coinbase.com%2Fapi-reference%2Fadvanced-trade-api%2Frest-api%2Fintroduction)
 
 This repository focuses on open-sourcing the "DLS" LSTM deep-learning model defined by Zihao Zhang et al in their paper "Deep Learning for Portfolio Optimisation" [1]. The repository contains the full strategy development pipeline (with the exception of the initial idea explored in great detail by authors [1]) from model-building, backtesting, live deployment and live tracking. 
 
