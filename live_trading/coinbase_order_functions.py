@@ -131,7 +131,7 @@ class CoinbaseTrader:
         }
 
     def get_user_accounts(self) -> dict[float]:
-        """get base value invested for each asset in portfolio"""
+        """returns base and base value invested for each asset in portfolio"""
         accounts = self.client.get_accounts() # all authenticated user accounts
         account_values = {}
         for account in accounts['accounts']:
@@ -253,7 +253,7 @@ class CoinbaseTrader:
 
         # check we meet minimum order requirements (post cash-clamp, since clamping can push us back below the minimum)
         min_side_value = 'quote_min_size' if (increment_type == 'quote_increment') else 'base_min_size'
-        min_size = Decimal(str(product[min_side_value]))
+        min_size = Decimal(str(product[min_side_value])) # get minimum permitted product trading order size  
         if adjusted_order_value < min_size: # if order amount is less than min increment skip order request
             return 0
 
@@ -349,16 +349,21 @@ class CoinbaseTrader:
         """
         exist all open trades, returing investemnts to base account
         """
+        accounts = self.get_user_accounts()
+
         orders = []
         if full_close:
             for key in portfolio_tickers:
-                order = self.modify_asset_order(
-                    asset = key, 
-                    total_pf_value = None, # weights None, wo will not be passed
-                    full_close = True
-                )
-                orders.append(order)
-        
+                # only close tickers with an actual open (nonzero) base balance - accounts
+                # includes a zero-balance entry for every tradeable currency, not just held ones
+                if accounts.get(self.get_base(key), 0) > 0:
+                    order = self.modify_asset_order(
+                        asset = key,
+                        total_pf_value = None, # weights None, wo will not be passed
+                        full_close = True
+                    )
+                    orders.append(order)
+
         return orders
         
     def multi_asset_invest(self,
@@ -376,7 +381,7 @@ class CoinbaseTrader:
         que = {}
         # liquidate holdings outside the current asset universe first (priority to sells),
         # otherwise their value is never converted to cash and BUY orders below can starve for funds
-        strategy_bases = {self.get_base(ticker) for ticker in portfolio_ticker_weights}
+        strategy_bases = {self.get_base(ticker) for ticker in portfolio_ticker_weights.keys()}
         for base, qty in accounts.items():
             if base not in strategy_bases and qty > 0 and base not in self._unpriceable_bases:
                 asset = f"{base}-{account_base}"

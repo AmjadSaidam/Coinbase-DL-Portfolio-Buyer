@@ -355,9 +355,14 @@ def _sql_database(database_name: str,
     db.create_data()
     return db
 
+def _asset_universe():
+    """"""
+    asset_universe_env = os.environ.get('LIVE_ASSETS')
+    return [asset.strip() for asset in asset_universe_env.split(',') if asset.strip()]
+
 # --- RUN PIPELINE ---
 if __name__ == '__main__':
-    asset_universe = [
-        'BTC-GBP', 'ETH-GBP', 'SOL-GBP', 'LINK-GBP', 'USDT-GBP'
-    ]
+    # get assets 
+    asset_universe = _asset_universe()
+    # poll live signal to order function 
     run_live_loop(asset_universe = asset_universe)

@@ -16,6 +16,7 @@ from telegram import Update # deals with commands, sends HTTP request to telegar
 from telegram.ext import Application, CommandHandler, ContextTypes
 # .py
 from live_trading.coinbase_order_functions import CoinbaseTrader as coin_trade
+from live_trading.live_loop import _asset_universe
 import live_trading.live_errors as coin_error
 
 # HTTP API and bot name
@@ -129,8 +130,8 @@ async def close_all(update: Update,
 
     order_msg = ''
     try:
-        portfolio_assets = [f'{asset}-GBP' for asset in coinbase_account.get_user_accounts() if asset != 'GBP'] # exclude base currency, add suffix
-        order = coinbase_account.multi_asset_close(portfolio_tickers = portfolio_assets, full_close = True)
+        asset_universe = _asset_universe()
+        order = coinbase_account.multi_asset_close(portfolio_tickers = asset_universe, full_close = True)
         order_msg = f'positions closed: {order}'
     except coin_error.CoinLoginError as e:
         order_msg = f'loggin error:\n{e}'
