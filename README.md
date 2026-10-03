@@ -160,6 +160,9 @@ LIVE_API_SECRET = ""
 LIVE_TIMEFRAME = 'FIVE_MINUTE'
 LIVE_WFA_IS_DAYS  = '50'
 
+# assets 
+LIVE_ASSETS = 'BTC-GBP,ETH-GBP,SOL-GBP,LINK-GBP,USDT-GBP,' # change to your desired asset universe, must be wrapped in '', comma seperated with no spaces and ending with comma, e.g. '<ASSET-1>,<ASSET_2>,'
+
 # model 
 LIVE_LSTM_HIDDEN_DIM = '128'
 LIVE_LSTM_LOOKBACK = '288'
