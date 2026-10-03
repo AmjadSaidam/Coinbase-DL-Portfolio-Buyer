@@ -202,7 +202,8 @@ async def error(update: Update,
 
 # --- BOT HELP ---
 # help command 
-async def help(update: Update):
+async def help(update: Update, 
+               context: ContextTypes.DEFAULT_TYPE):
     """function overview helper"""
     hellper_text = (
         """
